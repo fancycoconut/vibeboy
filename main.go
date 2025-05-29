@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"vibeboy/rom"
+	"vibeboy/engine"
 )
 
 func main() {
@@ -21,4 +22,7 @@ func main() {
 		return
 	}
 	fmt.Printf("Loaded ROM: %s (%d bytes)\n", romPath, len(gameROM.Data))
+
+	engine.NewGameboy(gameROM)
+	fmt.Println("Gameboy initialized with CPU, Memory, PPU, Input, and ROM.")
 }
