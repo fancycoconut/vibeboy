@@ -29,3 +29,10 @@ func NewGameboy(romData *rom.ROM) *Gameboy {
 		ROM:    romData,
 	}
 }
+
+// Step runs one emulation cycle (CPU, PPU, etc.)
+func (g *Gameboy) Step() {
+	g.CPU.Step(g.Memory)
+	g.PPU.Step()
+	// Input and timers would also be stepped here in a full implementation
+}
