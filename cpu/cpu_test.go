@@ -80,3 +80,60 @@ func TestLDBC_A(t *testing.T) {
 		t.Errorf("LD (BC),A: expected mem[0x1234]=0x56, got %02X", mem.Read(0x1234))
 	}
 }
+
+func TestLDBn(t *testing.T) {
+	mem := memory.New()
+	mem.Write(0x0100, 0x06) // LD B,n
+	mem.Write(0x0101, 0x77)
+	cpu := New()
+	cpu.Step(mem)
+	if cpu.B != 0x77 {
+		t.Errorf("LD B,n: expected B=0x77, got %02X", cpu.B)
+	}
+}
+
+func TestLDA_BC(t *testing.T) {
+	mem := memory.New()
+	mem.Write(0x0100, 0x0A) // LD A,(BC)
+	mem.Write(0x1234, 0x99)
+	cpu := New()
+	cpu.B = 0x12
+	cpu.C = 0x34
+	cpu.Step(mem)
+	if cpu.A != 0x99 {
+		t.Errorf("LD A,(BC): expected A=0x99, got %02X", cpu.A)
+	}
+}
+
+func TestINCC(t *testing.T) {
+	mem := memory.New()
+	mem.Write(0x0100, 0x0C) // INC C
+	cpu := New()
+	cpu.C = 0xFE
+	cpu.Step(mem)
+	if cpu.C != 0xFF {
+		t.Errorf("INC C: expected C=0xFF, got %02X", cpu.C)
+	}
+}
+
+func TestDECC(t *testing.T) {
+	mem := memory.New()
+	mem.Write(0x0100, 0x0D) // DEC C
+	cpu := New()
+	cpu.C = 0x01
+	cpu.Step(mem)
+	if cpu.C != 0x00 {
+		t.Errorf("DEC C: expected C=0x00, got %02X", cpu.C)
+	}
+}
+
+func TestLDCn(t *testing.T) {
+	mem := memory.New()
+	mem.Write(0x0100, 0x0E) // LD C,n
+	mem.Write(0x0101, 0x42)
+	cpu := New()
+	cpu.Step(mem)
+	if cpu.C != 0x42 {
+		t.Errorf("LD C,n: expected C=0x42, got %02X", cpu.C)
+	}
+}
