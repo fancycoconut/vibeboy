@@ -41,7 +41,7 @@ func (c *CPU) Step(mem interface{}) {
 	fmt.Printf("[CPU] PC=%04X OPCODE=%02X\n", c.PC, opcode)
 	c.PC++
 
-	// Decode & Execute (NOP 0x00, JP nn 0xC3, LD BC,nn 0x01)
+	// Decode & Execute (NOP 0x00, JP nn 0xC3, LD BC,nn 0x01, INC B 0x04, DEC B 0x05, LD (BC),A 0x02)
 	switch opcode {
 	case 0x00: // NOP
 		fmt.Println("[CPU] Executed NOP")
@@ -61,6 +61,16 @@ func (c *CPU) Step(mem interface{}) {
 		c.B = high
 		c.C = low
 		fmt.Printf("[CPU] Executed LD BC,%02X%02X\n", high, low)
+	case 0x04: // INC B
+		c.B++
+		fmt.Printf("[CPU] Executed INC B, B=%02X\n", c.B)
+	case 0x05: // DEC B
+		c.B--
+		fmt.Printf("[CPU] Executed DEC B, B=%02X\n", c.B)
+	case 0x02: // LD (BC),A
+		addr := uint16(c.B)<<8 | uint16(c.C)
+		m.Write(addr, c.A)
+		fmt.Printf("[CPU] Executed LD (BC),A, (BC)=%04X, A=%02X\n", addr, c.A)
 	default:
 		fmt.Printf("[CPU] Unimplemented opcode: %02X\n", opcode)
 	}
