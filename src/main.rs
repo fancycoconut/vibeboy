@@ -1,15 +1,5 @@
-mod apu;
-mod bus;
-mod cartridge;
-mod cpu;
-mod gameboy;
-mod interrupts;
-mod joypad;
-mod ppu;
-mod timer;
-
-use gameboy::GameBoy;
-use joypad::btn;
+use vibeboy::gameboy::GameBoy;
+use vibeboy::joypad::btn;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
