@@ -1,4 +1,5 @@
 pub mod apu;
+pub mod config;
 pub mod bus;
 pub mod cartridge;
 pub mod cpu;
