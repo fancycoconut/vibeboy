@@ -1,16 +1,21 @@
+use vibeboy::config::Config;
 use vibeboy::gameboy::GameBoy;
-use vibeboy::joypad::btn;
 use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
 use std::time::{Duration, Instant};
 
-const SCALE: u32 = 3;
-const WIDTH: u32 = 160 * SCALE;
-const HEIGHT: u32 = 144 * SCALE;
 const FRAME_DURATION: Duration = Duration::from_nanos(16_742_706); // ~59.73 Hz
 
 fn main() {
+    let config = Config::load();
+
+    let scale = config.display.scale;
+    let width  = 160 * scale;
+    let height = 144 * scale;
+
+    let keymap = config.keymap();
+    let quit_key = config.keybindings.quit.clone();
+
     let args: Vec<String> = std::env::args().collect();
     let rom_path = args.get(1).map(String::as_str).unwrap_or("red.gb");
 
@@ -28,7 +33,7 @@ fn main() {
     let video = sdl.video().expect("SDL2 video init failed");
 
     let window = video
-        .window("Vibeboy", WIDTH, HEIGHT)
+        .window("Vibeboy", width, height)
         .position_centered()
         .build()
         .expect("Window creation failed");
@@ -53,31 +58,30 @@ fn main() {
     let mut frame_start = Instant::now();
 
     'running: loop {
-        // Handle events
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => break 'running,
                 Event::KeyDown { keycode: Some(kc), .. } => {
-                    if let Some(b) = keycode_to_btn(kc) {
-                        gb.bus.joypad.press(b, &mut gb.bus.interrupts);
-                    }
-                    if kc == Keycode::Escape {
+                    let name = format!("{kc:?}");
+                    if name == quit_key {
                         break 'running;
+                    }
+                    if let Some(&btn) = keymap.get(&name) {
+                        gb.bus.joypad.press(btn, &mut gb.bus.interrupts);
                     }
                 }
                 Event::KeyUp { keycode: Some(kc), .. } => {
-                    if let Some(b) = keycode_to_btn(kc) {
-                        gb.bus.joypad.release(b);
+                    let name = format!("{kc:?}");
+                    if let Some(&btn) = keymap.get(&name) {
+                        gb.bus.joypad.release(btn);
                     }
                 }
                 _ => {}
             }
         }
 
-        // Emulate one full frame
         let framebuffer = gb.run_frame();
 
-        // Blit framebuffer to SDL2 texture
         texture
             .with_lock(None, |dst, _pitch| {
                 dst.copy_from_slice(framebuffer.as_slice());
@@ -85,30 +89,13 @@ fn main() {
             .expect("Texture lock failed");
 
         canvas.clear();
-        canvas
-            .copy(&texture, None, None)
-            .expect("Texture copy failed");
+        canvas.copy(&texture, None, None).expect("Texture copy failed");
         canvas.present();
 
-        // Pace to ~60 FPS (vsync handles it if enabled, this is a fallback)
         let elapsed = frame_start.elapsed();
         if elapsed < FRAME_DURATION {
             std::thread::sleep(FRAME_DURATION - elapsed);
         }
         frame_start = Instant::now();
-    }
-}
-
-fn keycode_to_btn(kc: Keycode) -> Option<usize> {
-    match kc {
-        Keycode::Right  => Some(btn::RIGHT),
-        Keycode::Left   => Some(btn::LEFT),
-        Keycode::Up     => Some(btn::UP),
-        Keycode::Down   => Some(btn::DOWN),
-        Keycode::Z      => Some(btn::B),
-        Keycode::X      => Some(btn::A),
-        Keycode::Return | Keycode::Return2 => Some(btn::START),
-        Keycode::RShift | Keycode::LShift  => Some(btn::SELECT),
-        _ => None,
     }
 }
