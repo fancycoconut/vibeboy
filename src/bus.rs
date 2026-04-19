@@ -72,7 +72,7 @@ impl Bus {
             0xFF00 => self.joypad.read(),
             0xFF01 => self.serial_data,
             0xFF02 => self.serial_ctrl,
-            0xFF03..=0xFF07 => self.timer.read(addr),
+            0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.flags,
             0xFF10..=0xFF3F => 0xFF, // APU — stub
             0xFF40..=0xFF4B => self.ppu.reg_read(addr),
@@ -110,7 +110,7 @@ impl Bus {
                     print!("{}", self.serial_data as char);
                 }
             }
-            0xFF03..=0xFF07 => self.timer.write(addr, val),
+            0xFF04..=0xFF07 => self.timer.write(addr, val),
             0xFF0F => self.interrupts.flags = val,
             0xFF10..=0xFF3F => {} // APU — stub
             0xFF46 => self.oam_dma(val),
