@@ -24,7 +24,7 @@ impl Timer {
 
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0xFF03 => (self.div_counter >> 8) as u8,
+            0xFF04 => (self.div_counter >> 8) as u8,
             0xFF05 => self.tima,
             0xFF06 => self.tma,
             0xFF07 => self.tac,
@@ -34,7 +34,7 @@ impl Timer {
 
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF03 => self.div_counter = 0,
+            0xFF04 => self.div_counter = 0,
             0xFF05 => self.tima = val,
             0xFF06 => self.tma = val,
             0xFF07 => self.tac = val & 0x07,

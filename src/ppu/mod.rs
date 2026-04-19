@@ -130,7 +130,17 @@ impl Ppu {
 
     pub fn reg_write(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF40 => self.lcdc = val,
+            0xFF40 => {
+                let was_on = self.lcdc & 0x80 != 0;
+                self.lcdc = val;
+                if was_on && val & 0x80 == 0 {
+                    // LCD turned off: real hardware resets to mode 0, LY=0, dot=0
+                    // so VRAM is accessible and next enable starts from a clean state.
+                    self.ly = 0;
+                    self.dot = 0;
+                    self.set_mode(0);
+                }
+            }
             0xFF41 => self.stat = (self.stat & 0x07) | (val & 0x78),
             0xFF42 => self.scy = val,
             0xFF43 => self.scx = val,
@@ -287,7 +297,8 @@ impl Ppu {
         // --- Background ---
         if self.lcdc & 0x01 != 0 {
             let tile_map_base: u16 = if self.lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
-            let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x8800 };
+            // Bit 4 = 1: unsigned, tiles 0-255 at 0x8000. Bit 4 = 0: signed, tile 0 at 0x9000.
+            let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
             let signed_addressing = self.lcdc & 0x10 == 0;
 
             let y = line.wrapping_add(self.scy as usize) & 0xFF;
@@ -325,7 +336,7 @@ impl Ppu {
         if self.lcdc & 0x20 != 0 && line >= self.wy as usize {
             let wx = self.wx.saturating_sub(7) as usize;
             let win_map_base: u16 = if self.lcdc & 0x40 != 0 { 0x9C00 } else { 0x9800 };
-            let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x8800 };
+            let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
             let signed_addressing = self.lcdc & 0x10 == 0;
 
             let y = line - self.wy as usize;
