@@ -1,4 +1,5 @@
 use crate::bus::Bus;
+use crate::cartridge::CartridgeHeader;
 use crate::cpu::Cpu;
 
 /// Top-level emulator struct. Owns the CPU and bus; drives the step loop.
@@ -9,10 +10,13 @@ pub struct GameBoy {
 
 impl GameBoy {
     pub fn new(rom: Vec<u8>) -> Self {
-        Self {
+        let is_gbc = CartridgeHeader::parse(&rom).is_gbc();
+        let mut gb = Self {
             cpu: Cpu::new(),
             bus: Bus::new(rom),
-        }
+        };
+        gb.bus.ppu.cgb_mode = is_gbc;
+        gb
     }
 
     /// Execute one CPU instruction and advance all other components.
