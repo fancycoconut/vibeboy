@@ -31,6 +31,22 @@ Or run the binary directly after building:
 
 If no ROM path is given it defaults to `red.gb` in the current directory.
 
+## Testing
+
+Run the unit tests (CPU instruction correctness):
+
+```bash
+cargo test --lib
+```
+
+Run the blargg `cpu_instrs` integration tests (all 11 ROMs):
+
+```bash
+cargo test --test blargg
+```
+
+The blargg tests step each ROM up to 200 million instructions and assert the serial output contains `Passed`. They cover: special instructions, interrupts, SP/HL ops, immediate ops, register-pair ops, loads, jumps/calls, misc, and ALU ops.
+
 ## Controls
 
 | Key | Game Boy button |
@@ -86,5 +102,5 @@ docs/
 | SDL2 window + joypad input | Done |
 | Timer + interrupts | Done |
 | Pokemon Red title screen | In progress |
-| blargg cpu_instrs tests pass | Upcoming |
+| blargg cpu_instrs tests pass | Done |
 | GBC color support | Upcoming |
