@@ -1,0 +1,15 @@
+[display]
+# Integer scale factor applied to the 160x144 Game Boy screen.
+scale = 3
+
+[keybindings]
+# SDL2 keycode names — see https://docs.rs/sdl2/latest/sdl2/keyboard/enum.Keycode.html
+right  = "Right"
+left   = "Left"
+up     = "Up"
+down   = "Down"
+a      = "X"
+b      = "Z"
+start  = "Return"
+select = "LShift"
+quit   = "Escape"
