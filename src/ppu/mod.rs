@@ -286,7 +286,7 @@ impl Ppu {
     }
 
     // -----------------------------------------------------------------------
-    // Scanline rendering (DMG + GBC scanline rasterizer)
+    // Scanline rendering — coordinator
     // -----------------------------------------------------------------------
 
     fn render_scanline(&mut self, oam: &[u8; 0xA0]) {
@@ -295,201 +295,319 @@ impl Ppu {
             return;
         }
 
-        // RGB output per pixel; written directly (both DMG and GBC paths).
         let mut line_rgb = [[0u8; 3]; 160];
-        // Whether the BG pixel at this column has a non-zero (non-transparent) color.
         let mut bg_color_nonzero = [false; 160];
-        // GBC only: whether the BG tile attribute has bit 7 set (BG has master priority).
-        let mut bg_tile_priority = [false; 160];
+        let mut bg_tile_priority = [false; 160]; // GBC only: tile attr bit 7
 
-        // --- Background ---
-        // DMG: LCDC bit 0 must be set. GBC: always render (bit 0 only affects priority).
+        // DMG: LCDC bit 0 gates BG. GBC: bit 0 only affects priority, BG always draws.
         if self.lcdc & 0x01 != 0 || self.cgb_mode {
-            let tile_map_base: u16 = if self.lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
-            let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
-            let signed_addressing = self.lcdc & 0x10 == 0;
-
-            let y = line.wrapping_add(self.scy as usize) & 0xFF;
-            let tile_row = y / 8;
-            let tile_y_base = y % 8;
-
-            for px in 0..160usize {
-                let x = (px + self.scx as usize) & 0xFF;
-                let tile_col = x / 8;
-                let tile_x = x % 8;
-
-                let map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
-                let tile_id = self.vram[0][(map_addr - 0x8000) as usize];
-
-                if self.cgb_mode {
-                    let attrs = self.vram[1][(map_addr - 0x8000) as usize];
-                    let vram_bank = if attrs & 0x08 != 0 { 1usize } else { 0usize };
-                    let palette_num = (attrs & 0x07) as usize;
-                    let x_flip = attrs & 0x20 != 0;
-                    let y_flip = attrs & 0x40 != 0;
-                    bg_tile_priority[px] = attrs & 0x80 != 0;
-
-                    let tile_y = if y_flip { 7 - tile_y_base } else { tile_y_base };
-                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
-                    let row_addr = (tile_addr - 0x8000) as usize + tile_y * 2;
-                    let lo = self.vram[vram_bank][row_addr];
-                    let hi = self.vram[vram_bank][row_addr + 1];
-
-                    let bit = if x_flip { tile_x } else { 7 - tile_x };
-                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                    bg_color_nonzero[px] = color_id != 0;
-                    line_rgb[px] = cgb_color(&self.bcpd, palette_num, color_id);
-                } else {
-                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
-                    let row_addr = (tile_addr - 0x8000) as usize + tile_y_base * 2;
-                    let lo = self.vram[0][row_addr];
-                    let hi = self.vram[0][row_addr + 1];
-
-                    let bit = 7 - tile_x;
-                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                    let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
-                    bg_color_nonzero[px] = color_id != 0;
-                    line_rgb[px] = DMG_COLORS[palette_color as usize];
-                }
+            if self.cgb_mode {
+                self.draw_bg_cgb(line, &mut line_rgb, &mut bg_color_nonzero, &mut bg_tile_priority);
+            } else {
+                self.draw_bg_dmg(line, &mut line_rgb, &mut bg_color_nonzero);
             }
         }
 
-        // --- Window ---
         if self.lcdc & 0x20 != 0 && line >= self.wy as usize {
-            let wx = self.wx.saturating_sub(7) as usize;
-            let win_map_base: u16 = if self.lcdc & 0x40 != 0 { 0x9C00 } else { 0x9800 };
-            let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
-            let signed_addressing = self.lcdc & 0x10 == 0;
-
-            let y = line - self.wy as usize;
-            let tile_row = y / 8;
-            let tile_y_base = y % 8;
-
-            for px in wx..160usize {
-                let x = px - wx;
-                let tile_col = x / 8;
-                let tile_x = x % 8;
-
-                let map_addr = win_map_base + (tile_row * 32 + tile_col) as u16;
-                let tile_id = self.vram[0][(map_addr - 0x8000) as usize];
-
-                if self.cgb_mode {
-                    let attrs = self.vram[1][(map_addr - 0x8000) as usize];
-                    let vram_bank = if attrs & 0x08 != 0 { 1usize } else { 0usize };
-                    let palette_num = (attrs & 0x07) as usize;
-                    let x_flip = attrs & 0x20 != 0;
-                    let y_flip = attrs & 0x40 != 0;
-                    bg_tile_priority[px] = attrs & 0x80 != 0;
-
-                    let tile_y = if y_flip { 7 - tile_y_base } else { tile_y_base };
-                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
-                    let row_addr = (tile_addr - 0x8000) as usize + tile_y * 2;
-                    let lo = self.vram[vram_bank][row_addr];
-                    let hi = self.vram[vram_bank][row_addr + 1];
-
-                    let bit = if x_flip { tile_x } else { 7 - tile_x };
-                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                    bg_color_nonzero[px] = color_id != 0;
-                    line_rgb[px] = cgb_color(&self.bcpd, palette_num, color_id);
-                } else {
-                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
-                    let row_addr = (tile_addr - 0x8000) as usize + tile_y_base * 2;
-                    let lo = self.vram[0][row_addr];
-                    let hi = self.vram[0][row_addr + 1];
-
-                    let bit = 7 - tile_x;
-                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                    let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
-                    bg_color_nonzero[px] = color_id != 0;
-                    line_rgb[px] = DMG_COLORS[palette_color as usize];
-                }
+            if self.cgb_mode {
+                self.draw_window_cgb(line, &mut line_rgb, &mut bg_color_nonzero, &mut bg_tile_priority);
+            } else {
+                self.draw_window_dmg(line, &mut line_rgb, &mut bg_color_nonzero);
             }
         }
 
-        // --- Sprites ---
         if self.lcdc & 0x02 != 0 {
-            let sprite_height: i32 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
-            let mut visible: Vec<(i32, usize)> = Vec::new(); // (x, oam_index)
-
-            for i in 0..40usize {
-                let base = i * 4;
-                let sy = oam[base] as i32 - 16;
-                let sx = oam[base + 1] as i32 - 8;
-                if (line as i32) >= sy && (line as i32) < sy + sprite_height {
-                    visible.push((sx, i));
-                    if visible.len() == 10 {
-                        break;
-                    }
-                }
-            }
-
-            // Lower OAM index has priority (draw last so it lands on top)
-            visible.reverse();
-
-            for (sx, i) in visible {
-                let base = i * 4;
-                let sy = oam[base] as i32 - 16;
-                let flags = oam[base + 3];
-                let tile_id = oam[base + 2] & if sprite_height == 16 { 0xFE } else { 0xFF };
-                let flip_x = flags & 0x20 != 0;
-                let flip_y = flags & 0x40 != 0;
-                let bg_over = flags & 0x80 != 0;
-
-                // GBC: tile VRAM bank from OAM byte 3 bit 3
-                let vram_bank = if self.cgb_mode && flags & 0x08 != 0 { 1usize } else { 0usize };
-
-                let mut tile_y = (line as i32 - sy) as usize;
-                if flip_y {
-                    tile_y = sprite_height as usize - 1 - tile_y;
-                }
-
-                let row_addr = tile_id as usize * 16 + tile_y * 2;
-                let lo = self.vram[vram_bank][row_addr];
-                let hi = self.vram[vram_bank][row_addr + 1];
-
-                for tile_x in 0..8usize {
-                    let px = sx + tile_x as i32;
-                    if px < 0 || px >= 160 {
-                        continue;
-                    }
-                    let px = px as usize;
-
-                    // Priority: in GBC, OAM bit 7 OR bg tile attr bit 7 both cause BG to win
-                    // when LCDC bit 0 is set and BG pixel is non-zero. If LCDC bit 0 == 0,
-                    // sprites always win regardless.
-                    if self.cgb_mode {
-                        if self.lcdc & 0x01 != 0 && (bg_over || bg_tile_priority[px]) && bg_color_nonzero[px] {
-                            continue;
-                        }
-                    } else if bg_over && bg_color_nonzero[px] {
-                        continue;
-                    }
-
-                    let bit = if flip_x { tile_x } else { 7 - tile_x };
-                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                    if color_id == 0 {
-                        continue; // transparent
-                    }
-
-                    line_rgb[px] = if self.cgb_mode {
-                        // GBC: CGB palette from OAM byte 3 bits 0-2
-                        let palette_num = (flags & 0x07) as usize;
-                        cgb_color(&self.ocpd, palette_num, color_id)
-                    } else {
-                        let palette = if flags & 0x10 != 0 { self.obp1 } else { self.obp0 };
-                        let palette_color = (palette >> (color_id * 2)) & 0x03;
-                        DMG_COLORS[palette_color as usize]
-                    };
-                }
+            if self.cgb_mode {
+                self.draw_sprites_cgb(line, oam, &mut line_rgb, &bg_color_nonzero, &bg_tile_priority);
+            } else {
+                self.draw_sprites_dmg(line, oam, &mut line_rgb, &bg_color_nonzero);
             }
         }
 
-        // --- Write to framebuffer ---
         let fb_base = line * 160 * 3;
         for (px, rgb) in line_rgb.iter().enumerate() {
             self.framebuffer[fb_base + px * 3] = rgb[0];
             self.framebuffer[fb_base + px * 3 + 1] = rgb[1];
             self.framebuffer[fb_base + px * 3 + 2] = rgb[2];
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Background rendering
+    // -----------------------------------------------------------------------
+
+    fn draw_bg_dmg(
+        &self,
+        line: usize,
+        line_rgb: &mut [[u8; 3]; 160],
+        bg_color_nonzero: &mut [bool; 160],
+    ) {
+        let tile_map_base: u16 = if self.lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
+        let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
+        let signed = self.lcdc & 0x10 == 0;
+
+        let y = line.wrapping_add(self.scy as usize) & 0xFF;
+        let tile_row = y / 8;
+        let tile_y = y % 8;
+
+        for px in 0..160usize {
+            let x = (px + self.scx as usize) & 0xFF;
+            let tile_col = x / 8;
+            let tile_x = x % 8;
+
+            let map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
+            let tile_id = self.vram[0][(map_addr - 0x8000) as usize];
+            let row_addr = (tile_addr(tile_data_base, tile_id, signed) - 0x8000) as usize + tile_y * 2;
+            let lo = self.vram[0][row_addr];
+            let hi = self.vram[0][row_addr + 1];
+
+            let color_id = ((hi >> (7 - tile_x)) & 1) << 1 | ((lo >> (7 - tile_x)) & 1);
+            let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
+            bg_color_nonzero[px] = color_id != 0;
+            line_rgb[px] = DMG_COLORS[palette_color as usize];
+        }
+    }
+
+    fn draw_bg_cgb(
+        &self,
+        line: usize,
+        line_rgb: &mut [[u8; 3]; 160],
+        bg_color_nonzero: &mut [bool; 160],
+        bg_tile_priority: &mut [bool; 160],
+    ) {
+        let tile_map_base: u16 = if self.lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
+        let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
+        let signed = self.lcdc & 0x10 == 0;
+
+        let y = line.wrapping_add(self.scy as usize) & 0xFF;
+        let tile_row = y / 8;
+        let tile_y_base = y % 8;
+
+        for px in 0..160usize {
+            let x = (px + self.scx as usize) & 0xFF;
+            let tile_col = x / 8;
+            let tile_x = x % 8;
+
+            let map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
+            let map_idx = (map_addr - 0x8000) as usize;
+            let tile_id = self.vram[0][map_idx];
+            let attrs = self.vram[1][map_idx];
+
+            let vram_bank = if attrs & 0x08 != 0 { 1 } else { 0 };
+            let palette_num = (attrs & 0x07) as usize;
+            let tile_y = if attrs & 0x40 != 0 { 7 - tile_y_base } else { tile_y_base };
+            bg_tile_priority[px] = attrs & 0x80 != 0;
+
+            let row_addr = (tile_addr(tile_data_base, tile_id, signed) - 0x8000) as usize + tile_y * 2;
+            let lo = self.vram[vram_bank][row_addr];
+            let hi = self.vram[vram_bank][row_addr + 1];
+
+            let bit = if attrs & 0x20 != 0 { tile_x } else { 7 - tile_x }; // x-flip
+            let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+            bg_color_nonzero[px] = color_id != 0;
+            line_rgb[px] = cgb_color(&self.bcpd, palette_num, color_id);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Window rendering
+    // -----------------------------------------------------------------------
+
+    fn draw_window_dmg(
+        &self,
+        line: usize,
+        line_rgb: &mut [[u8; 3]; 160],
+        bg_color_nonzero: &mut [bool; 160],
+    ) {
+        let wx = self.wx.saturating_sub(7) as usize;
+        let tile_map_base: u16 = if self.lcdc & 0x40 != 0 { 0x9C00 } else { 0x9800 };
+        let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
+        let signed = self.lcdc & 0x10 == 0;
+
+        let y = line - self.wy as usize;
+        let tile_row = y / 8;
+        let tile_y = y % 8;
+
+        for px in wx..160usize {
+            let x = px - wx;
+            let tile_col = x / 8;
+            let tile_x = x % 8;
+
+            let map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
+            let tile_id = self.vram[0][(map_addr - 0x8000) as usize];
+            let row_addr = (tile_addr(tile_data_base, tile_id, signed) - 0x8000) as usize + tile_y * 2;
+            let lo = self.vram[0][row_addr];
+            let hi = self.vram[0][row_addr + 1];
+
+            let color_id = ((hi >> (7 - tile_x)) & 1) << 1 | ((lo >> (7 - tile_x)) & 1);
+            let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
+            bg_color_nonzero[px] = color_id != 0;
+            line_rgb[px] = DMG_COLORS[palette_color as usize];
+        }
+    }
+
+    fn draw_window_cgb(
+        &self,
+        line: usize,
+        line_rgb: &mut [[u8; 3]; 160],
+        bg_color_nonzero: &mut [bool; 160],
+        bg_tile_priority: &mut [bool; 160],
+    ) {
+        let wx = self.wx.saturating_sub(7) as usize;
+        let tile_map_base: u16 = if self.lcdc & 0x40 != 0 { 0x9C00 } else { 0x9800 };
+        let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
+        let signed = self.lcdc & 0x10 == 0;
+
+        let y = line - self.wy as usize;
+        let tile_row = y / 8;
+        let tile_y_base = y % 8;
+
+        for px in wx..160usize {
+            let x = px - wx;
+            let tile_col = x / 8;
+            let tile_x = x % 8;
+
+            let map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
+            let map_idx = (map_addr - 0x8000) as usize;
+            let tile_id = self.vram[0][map_idx];
+            let attrs = self.vram[1][map_idx];
+
+            let vram_bank = if attrs & 0x08 != 0 { 1 } else { 0 };
+            let palette_num = (attrs & 0x07) as usize;
+            let tile_y = if attrs & 0x40 != 0 { 7 - tile_y_base } else { tile_y_base };
+            bg_tile_priority[px] = attrs & 0x80 != 0;
+
+            let row_addr = (tile_addr(tile_data_base, tile_id, signed) - 0x8000) as usize + tile_y * 2;
+            let lo = self.vram[vram_bank][row_addr];
+            let hi = self.vram[vram_bank][row_addr + 1];
+
+            let bit = if attrs & 0x20 != 0 { tile_x } else { 7 - tile_x }; // x-flip
+            let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+            bg_color_nonzero[px] = color_id != 0;
+            line_rgb[px] = cgb_color(&self.bcpd, palette_num, color_id);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Sprite rendering
+    // -----------------------------------------------------------------------
+
+    fn collect_sprites(&self, line: usize, oam: &[u8; 0xA0], sprite_height: i32) -> Vec<(i32, usize)> {
+        let mut visible: Vec<(i32, usize)> = Vec::new();
+        for i in 0..40usize {
+            let base = i * 4;
+            let sy = oam[base] as i32 - 16;
+            let sx = oam[base + 1] as i32 - 8;
+            if (line as i32) >= sy && (line as i32) < sy + sprite_height {
+                visible.push((sx, i));
+                if visible.len() == 10 {
+                    break;
+                }
+            }
+        }
+        // Lower OAM index has priority — draw highest index first so lowest lands on top.
+        visible.reverse();
+        visible
+    }
+
+    fn draw_sprites_dmg(
+        &self,
+        line: usize,
+        oam: &[u8; 0xA0],
+        line_rgb: &mut [[u8; 3]; 160],
+        bg_color_nonzero: &[bool; 160],
+    ) {
+        let sprite_height: i32 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
+
+        for (sx, i) in self.collect_sprites(line, oam, sprite_height) {
+            let base = i * 4;
+            let sy = oam[base] as i32 - 16;
+            let flags = oam[base + 3];
+            let tile_id = oam[base + 2] & if sprite_height == 16 { 0xFE } else { 0xFF };
+            let flip_x = flags & 0x20 != 0;
+            let flip_y = flags & 0x40 != 0;
+            let bg_over = flags & 0x80 != 0;
+            let palette = if flags & 0x10 != 0 { self.obp1 } else { self.obp0 };
+
+            let tile_y = {
+                let raw = (line as i32 - sy) as usize;
+                if flip_y { sprite_height as usize - 1 - raw } else { raw }
+            };
+
+            let row_addr = tile_id as usize * 16 + tile_y * 2;
+            let lo = self.vram[0][row_addr];
+            let hi = self.vram[0][row_addr + 1];
+
+            for tile_x in 0..8usize {
+                let px = sx + tile_x as i32;
+                if px < 0 || px >= 160 {
+                    continue;
+                }
+                let px = px as usize;
+                if bg_over && bg_color_nonzero[px] {
+                    continue;
+                }
+
+                let bit = if flip_x { tile_x } else { 7 - tile_x };
+                let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                if color_id == 0 {
+                    continue;
+                }
+                let palette_color = (palette >> (color_id * 2)) & 0x03;
+                line_rgb[px] = DMG_COLORS[palette_color as usize];
+            }
+        }
+    }
+
+    fn draw_sprites_cgb(
+        &self,
+        line: usize,
+        oam: &[u8; 0xA0],
+        line_rgb: &mut [[u8; 3]; 160],
+        bg_color_nonzero: &[bool; 160],
+        bg_tile_priority: &[bool; 160],
+    ) {
+        let sprite_height: i32 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
+
+        for (sx, i) in self.collect_sprites(line, oam, sprite_height) {
+            let base = i * 4;
+            let sy = oam[base] as i32 - 16;
+            let flags = oam[base + 3];
+            let tile_id = oam[base + 2] & if sprite_height == 16 { 0xFE } else { 0xFF };
+            let flip_x = flags & 0x20 != 0;
+            let flip_y = flags & 0x40 != 0;
+            let bg_over = flags & 0x80 != 0;
+            let vram_bank = if flags & 0x08 != 0 { 1 } else { 0 };
+            let palette_num = (flags & 0x07) as usize;
+
+            let tile_y = {
+                let raw = (line as i32 - sy) as usize;
+                if flip_y { sprite_height as usize - 1 - raw } else { raw }
+            };
+
+            let row_addr = tile_id as usize * 16 + tile_y * 2;
+            let lo = self.vram[vram_bank][row_addr];
+            let hi = self.vram[vram_bank][row_addr + 1];
+
+            for tile_x in 0..8usize {
+                let px = sx + tile_x as i32;
+                if px < 0 || px >= 160 {
+                    continue;
+                }
+                let px = px as usize;
+                // LCDC bit 0 = 0: sprites always win. Otherwise OAM bit 7 or tile attr bit 7
+                // causes BG to win when the BG pixel is non-zero.
+                if self.lcdc & 0x01 != 0 && (bg_over || bg_tile_priority[px]) && bg_color_nonzero[px] {
+                    continue;
+                }
+
+                let bit = if flip_x { tile_x } else { 7 - tile_x };
+                let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                if color_id == 0 {
+                    continue;
+                }
+                line_rgb[px] = cgb_color(&self.ocpd, palette_num, color_id);
+            }
         }
     }
 }
