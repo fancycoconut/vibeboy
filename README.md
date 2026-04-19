@@ -52,10 +52,10 @@ The blargg tests step each ROM up to 200 million instructions and assert the ser
 | Key | Game Boy button |
 |---|---|
 | Arrow keys | D-pad |
-| X | A |
-| Z | B |
+| Z | A |
+| X | B |
 | Enter | Start |
-| Shift | Select |
+| Space | Select |
 | Escape | Quit |
 
 ## Cartridge support
