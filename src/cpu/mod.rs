@@ -171,4 +171,8 @@ impl Cpu {
     pub fn halt(&mut self) {
         self.halted = true;
     }
+
+    pub fn is_halted(&self) -> bool {
+        self.halted
+    }
 }
