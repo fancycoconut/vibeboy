@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo init *)",
+      "Bash(rtk cargo *)",
+      "Bash(timeout 5 cargo run -- red.gb)",
+      "Bash(cargo run *)",
+      "Bash(kill %1)",
+      "Read(//tmp/**)",
+      "Bash(cargo build *)"
+    ]
+  }
+}

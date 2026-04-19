@@ -1,0 +1,48 @@
+use crate::bus::Bus;
+use crate::cpu::Cpu;
+
+/// Top-level emulator struct. Owns the CPU and bus; drives the step loop.
+pub struct GameBoy {
+    pub cpu: Cpu,
+    pub bus: Bus,
+}
+
+impl GameBoy {
+    pub fn new(rom: Vec<u8>) -> Self {
+        Self {
+            cpu: Cpu::new(),
+            bus: Bus::new(rom),
+        }
+    }
+
+    /// Execute one CPU instruction and advance all other components.
+    /// Returns true when a VBlank just completed (frame is ready).
+    pub fn step(&mut self) -> bool {
+        let cycles = self.cpu.step(&mut self.bus);
+
+        self.bus.timer.step(cycles, &mut self.bus.interrupts);
+
+        let oam = self.bus.oam_snapshot();
+        self.bus.ppu.step(cycles, &oam);
+
+        if self.bus.ppu.int_vblank {
+            self.bus.interrupts.request(0);
+        }
+        if self.bus.ppu.int_stat {
+            self.bus.interrupts.request(1);
+        }
+
+        if self.bus.ppu.frame_ready {
+            self.bus.ppu.frame_ready = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Run until a complete frame is ready, then return the framebuffer.
+    pub fn run_frame(&mut self) -> &[u8; 160 * 144 * 3] {
+        while !self.step() {}
+        &self.bus.ppu.framebuffer
+    }
+}
