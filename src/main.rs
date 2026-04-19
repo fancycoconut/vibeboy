@@ -1,20 +1,54 @@
 use vibeboy::config::Config;
 use vibeboy::gameboy::GameBoy;
+use vibeboy::joypad::btn;
 use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 const FRAME_DURATION: Duration = Duration::from_nanos(16_742_706); // ~59.73 Hz
 
+fn build_keymap(kb: &vibeboy::config::KeyBindings) -> HashMap<Keycode, usize> {
+    [
+        (kb.right.as_str(),  btn::RIGHT),
+        (kb.left.as_str(),   btn::LEFT),
+        (kb.up.as_str(),     btn::UP),
+        (kb.down.as_str(),   btn::DOWN),
+        (kb.a.as_str(),      btn::A),
+        (kb.b.as_str(),      btn::B),
+        (kb.start.as_str(),  btn::START),
+        (kb.select.as_str(), btn::SELECT),
+    ]
+    .into_iter()
+    .filter_map(|(name, button)| {
+        match Keycode::from_name(name) {
+            Some(kc) => Some((kc, button)),
+            None => {
+                eprintln!("Warning: unknown key name '{name}' in vibeboy.toml — binding ignored");
+                None
+            }
+        }
+    })
+    .collect()
+}
+
+fn resolve_quit_key(name: &str) -> Keycode {
+    Keycode::from_name(name).unwrap_or_else(|| {
+        eprintln!("Warning: unknown quit key '{name}', defaulting to Escape");
+        Keycode::ESCAPE
+    })
+}
+
 fn main() {
     let config = Config::load();
 
-    let scale = config.display.scale;
+    let scale  = config.display.scale;
     let width  = 160 * scale;
     let height = 144 * scale;
 
-    let keymap = config.keymap();
-    let quit_key = config.keybindings.quit.clone();
+    let keymap  = build_keymap(&config.keybindings);
+    let quit_kc = resolve_quit_key(&config.keybindings.quit);
 
     let args: Vec<String> = std::env::args().collect();
     let rom_path = args.get(1).map(String::as_str).unwrap_or("red.gb");
@@ -62,18 +96,16 @@ fn main() {
             match event {
                 Event::Quit { .. } => break 'running,
                 Event::KeyDown { keycode: Some(kc), .. } => {
-                    let name = format!("{kc:?}");
-                    if name == quit_key {
+                    if kc == quit_kc {
                         break 'running;
                     }
-                    if let Some(&btn) = keymap.get(&name) {
-                        gb.bus.joypad.press(btn, &mut gb.bus.interrupts);
+                    if let Some(&button) = keymap.get(&kc) {
+                        gb.bus.joypad.press(button, &mut gb.bus.interrupts);
                     }
                 }
                 Event::KeyUp { keycode: Some(kc), .. } => {
-                    let name = format!("{kc:?}");
-                    if let Some(&btn) = keymap.get(&name) {
-                        gb.bus.joypad.release(btn);
+                    if let Some(&button) = keymap.get(&kc) {
+                        gb.bus.joypad.release(button);
                     }
                 }
                 _ => {}

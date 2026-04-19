@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -72,20 +71,4 @@ impl Config {
         }
     }
 
-    /// Build a keycode-name → button-index map for fast lookup at runtime.
-    pub fn keymap(&self) -> HashMap<String, usize> {
-        use crate::joypad::btn;
-        [
-            (self.keybindings.right.clone(),  btn::RIGHT),
-            (self.keybindings.left.clone(),   btn::LEFT),
-            (self.keybindings.up.clone(),     btn::UP),
-            (self.keybindings.down.clone(),   btn::DOWN),
-            (self.keybindings.a.clone(),      btn::A),
-            (self.keybindings.b.clone(),      btn::B),
-            (self.keybindings.start.clone(),  btn::START),
-            (self.keybindings.select.clone(), btn::SELECT),
-        ]
-        .into_iter()
-        .collect()
-    }
 }
