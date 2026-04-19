@@ -2,3 +2,7 @@
 
 # Claude
 .claude/settings.local.json
+
+# ROMs
+*.gb
+*.gbc
