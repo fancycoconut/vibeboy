@@ -26,6 +26,17 @@ pub struct Registers {
 }
 
 impl Registers {
+    /// Post-boot-ROM state for DMG hardware.
+    pub fn dmg() -> Self {
+        Self { a: 0x01, f: 0xB0, b: 0x00, c: 0x13, d: 0x00, e: 0xD8, h: 0x01, l: 0x4D, sp: 0xFFFE, pc: 0x0100 }
+    }
+
+    /// Post-boot-ROM state for GBC hardware.
+    /// GBC games read A at 0x0100 to detect hardware: 0x11 = GBC, 0x01 = DMG.
+    pub fn gbc() -> Self {
+        Self { a: 0x11, f: 0x80, b: 0x00, c: 0x00, d: 0xFF, e: 0x56, h: 0x00, l: 0x0D, sp: 0xFFFE, pc: 0x0100 }
+    }
+
     // 16-bit register pair getters
     pub fn af(&self) -> u16 { ((self.a as u16) << 8) | (self.f as u16) }
     pub fn bc(&self) -> u16 { ((self.b as u16) << 8) | (self.c as u16) }
@@ -68,25 +79,9 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    pub fn new() -> Self {
-        // Post-boot ROM register state (DMG)
-        let mut reg = Registers::default();
-        reg.a = 0x01;
-        reg.f = 0xB0;
-        reg.b = 0x00;
-        reg.c = 0x13;
-        reg.d = 0x00;
-        reg.e = 0xD8;
-        reg.h = 0x01;
-        reg.l = 0x4D;
-        reg.sp = 0xFFFE;
-        reg.pc = 0x0100;
-        Self {
-            reg,
-            ime: false,
-            ime_scheduled: false,
-            halted: false,
-        }
+    pub fn new(is_gbc: bool) -> Self {
+        let reg = if is_gbc { Registers::gbc() } else { Registers::dmg() };
+        Self { reg, ime: false, ime_scheduled: false, halted: false }
     }
 
     /// Execute one instruction (or service an interrupt).

@@ -77,7 +77,7 @@ src/
     mod.rs          LR35902 CPU, registers, interrupt dispatch
     instructions.rs All 512 opcodes (unprefixed + 0xCB prefix)
   ppu/
-    mod.rs          Scanline PPU, 4-mode state machine, DMG palette
+    mod.rs          Scanline PPU, 4-mode state machine, DMG + GBC color rendering
   cartridge/
     mod.rs          Cartridge trait, header parsing, factory
     mbc0.rs         ROM-only
@@ -103,4 +103,4 @@ docs/
 | Timer + interrupts | Done |
 | Pokemon Red title screen | In progress |
 | blargg cpu_instrs tests pass | Done |
-| GBC color support | Upcoming |
+| GBC color support | Done |
