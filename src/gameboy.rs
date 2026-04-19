@@ -12,7 +12,7 @@ impl GameBoy {
     pub fn new(rom: Vec<u8>) -> Self {
         let is_gbc = CartridgeHeader::parse(&rom).is_gbc();
         let mut gb = Self {
-            cpu: Cpu::new(),
+            cpu: Cpu::new(is_gbc),
             bus: Bus::new(rom),
         };
         gb.bus.ppu.cgb_mode = is_gbc;

@@ -20,7 +20,7 @@ fn setup(instructions: &[u8]) -> (Cpu, Bus) {
         rom[0x0100 + i] = b;
     }
 
-    let mut cpu = Cpu::new();
+    let mut cpu = Cpu::new(false);
     cpu.reg = Registers::default();
     cpu.reg.sp = 0xFFFE;
     cpu.reg.pc = 0x0100;
