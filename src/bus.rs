@@ -27,6 +27,9 @@ pub struct Bus {
     serial_data: u8,
     /// Serial control (0xFF02)
     serial_ctrl: u8,
+    /// Accumulates every byte transferred via serial (0xFF02 write 0x81).
+    /// Used by integration tests to capture blargg output without stdout.
+    pub serial_buf: Vec<u8>,
     pub ppu: Ppu,
     pub timer: Timer,
     pub joypad: Joypad,
@@ -44,6 +47,7 @@ impl Bus {
             oam: [0; 0xA0],
             serial_data: 0,
             serial_ctrl: 0,
+            serial_buf: Vec::new(),
             ppu: Ppu::new(),
             timer: Timer::new(),
             joypad: Joypad::new(),
@@ -101,6 +105,8 @@ impl Bus {
                 self.serial_ctrl = val;
                 // Blargg test ROMs signal transfer start by writing 0x81
                 if val == 0x81 {
+                    self.serial_buf.push(self.serial_data);
+                    #[cfg(not(test))]
                     print!("{}", self.serial_data as char);
                 }
             }

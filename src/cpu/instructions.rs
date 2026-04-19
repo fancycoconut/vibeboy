@@ -689,15 +689,19 @@ fn op_add_hl(cpu: &mut Cpu, val: u16) {
 fn op_daa(cpu: &mut Cpu) {
     let mut a = cpu.reg.a as i32;
     if !cpu.reg.flag_n() {
-        if cpu.reg.flag_h() || (a & 0x0F) > 9 { a += 0x06; }
-        if cpu.reg.flag_c() || a > 0x9F { a += 0x60; }
+        // After addition: correct lower and upper BCD digits
+        if cpu.reg.flag_h() || (a & 0x0F) > 0x09 { a += 0x06; }
+        let carry = cpu.reg.flag_c() || a > 0x9F;
+        if carry { a += 0x60; }
+        // In the addition path carry is explicitly set or cleared
+        cpu.reg.set_flag_c(carry);
     } else {
+        // After subtraction: carry is preserved as-is, only adjust value
         if cpu.reg.flag_h() { a -= 0x06; }
         if cpu.reg.flag_c() { a -= 0x60; }
     }
-    cpu.reg.set_flag_h(false);
-    if a & 0x100 != 0 { cpu.reg.set_flag_c(true); }
     cpu.reg.a = a as u8;
+    cpu.reg.set_flag_h(false);
     cpu.reg.set_flag_z(cpu.reg.a == 0);
 }
 
