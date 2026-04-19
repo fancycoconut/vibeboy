@@ -1,4 +1,4 @@
-/// Pixel Processing Unit — DMG scanline renderer with GBC color palette stubs.
+/// Pixel Processing Unit — DMG + GBC scanline renderer.
 ///
 /// Modes per scanline (456 dots total):
 ///   Mode 2 (OAM Scan)  — dots 0–79
@@ -28,6 +28,9 @@ pub struct Ppu {
     bcpd: [u8; 64],             // 0xFF69 BG palette data (8 palettes × 4 colors × 2 bytes)
     ocps: u8,                   // 0xFF6A OBJ palette spec
     ocpd: [u8; 64],             // 0xFF6B OBJ palette data
+
+    /// True when running a GBC ROM — enables CGB palette and tile attribute rendering.
+    pub cgb_mode: bool,
 
     // Internal state
     dot: u16,                  // dot counter within current scanline (0–455)
@@ -71,6 +74,7 @@ impl Ppu {
             bcpd: [0xFF; 64],
             ocps: 0,
             ocpd: [0xFF; 64],
+            cgb_mode: false,
             dot: 0,
             mode: 2,
             framebuffer: Box::new([0; 160 * 144 * 3]),
@@ -282,7 +286,7 @@ impl Ppu {
     }
 
     // -----------------------------------------------------------------------
-    // Scanline rendering (simplified scanline rasterizer)
+    // Scanline rendering (DMG + GBC scanline rasterizer)
     // -----------------------------------------------------------------------
 
     fn render_scanline(&mut self, oam: &[u8; 0xA0]) {
@@ -291,19 +295,23 @@ impl Ppu {
             return;
         }
 
-        let mut line_buf = [0u8; 160]; // colour index (0–3) per pixel
-        let mut bg_priority = [false; 160]; // BG-over-sprite flag
+        // RGB output per pixel; written directly (both DMG and GBC paths).
+        let mut line_rgb = [[0u8; 3]; 160];
+        // Whether the BG pixel at this column has a non-zero (non-transparent) color.
+        let mut bg_color_nonzero = [false; 160];
+        // GBC only: whether the BG tile attribute has bit 7 set (BG has master priority).
+        let mut bg_tile_priority = [false; 160];
 
         // --- Background ---
-        if self.lcdc & 0x01 != 0 {
+        // DMG: LCDC bit 0 must be set. GBC: always render (bit 0 only affects priority).
+        if self.lcdc & 0x01 != 0 || self.cgb_mode {
             let tile_map_base: u16 = if self.lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
-            // Bit 4 = 1: unsigned, tiles 0-255 at 0x8000. Bit 4 = 0: signed, tile 0 at 0x9000.
             let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
             let signed_addressing = self.lcdc & 0x10 == 0;
 
             let y = line.wrapping_add(self.scy as usize) & 0xFF;
             let tile_row = y / 8;
-            let tile_y = y % 8;
+            let tile_y_base = y % 8;
 
             for px in 0..160usize {
                 let x = (px + self.scx as usize) & 0xFF;
@@ -313,22 +321,36 @@ impl Ppu {
                 let map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
                 let tile_id = self.vram[0][(map_addr - 0x8000) as usize];
 
-                let tile_addr = if signed_addressing {
-                    let id = tile_id as i8 as i16;
-                    ((tile_data_base as i32) + (id as i32) * 16) as u16
+                if self.cgb_mode {
+                    let attrs = self.vram[1][(map_addr - 0x8000) as usize];
+                    let vram_bank = if attrs & 0x08 != 0 { 1usize } else { 0usize };
+                    let palette_num = (attrs & 0x07) as usize;
+                    let x_flip = attrs & 0x20 != 0;
+                    let y_flip = attrs & 0x40 != 0;
+                    bg_tile_priority[px] = attrs & 0x80 != 0;
+
+                    let tile_y = if y_flip { 7 - tile_y_base } else { tile_y_base };
+                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
+                    let row_addr = (tile_addr - 0x8000) as usize + tile_y * 2;
+                    let lo = self.vram[vram_bank][row_addr];
+                    let hi = self.vram[vram_bank][row_addr + 1];
+
+                    let bit = if x_flip { tile_x } else { 7 - tile_x };
+                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                    bg_color_nonzero[px] = color_id != 0;
+                    line_rgb[px] = cgb_color(&self.bcpd, palette_num, color_id);
                 } else {
-                    tile_data_base + tile_id as u16 * 16
-                };
+                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
+                    let row_addr = (tile_addr - 0x8000) as usize + tile_y_base * 2;
+                    let lo = self.vram[0][row_addr];
+                    let hi = self.vram[0][row_addr + 1];
 
-                let row_addr = (tile_addr - 0x8000) as usize + tile_y * 2;
-                let lo = self.vram[0][row_addr];
-                let hi = self.vram[0][row_addr + 1];
-
-                let bit = 7 - tile_x;
-                let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
-                line_buf[px] = palette_color;
-                bg_priority[px] = color_id != 0;
+                    let bit = 7 - tile_x;
+                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                    let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
+                    bg_color_nonzero[px] = color_id != 0;
+                    line_rgb[px] = DMG_COLORS[palette_color as usize];
+                }
             }
         }
 
@@ -341,7 +363,7 @@ impl Ppu {
 
             let y = line - self.wy as usize;
             let tile_row = y / 8;
-            let tile_y = y % 8;
+            let tile_y_base = y % 8;
 
             for px in wx..160usize {
                 let x = px - wx;
@@ -351,22 +373,36 @@ impl Ppu {
                 let map_addr = win_map_base + (tile_row * 32 + tile_col) as u16;
                 let tile_id = self.vram[0][(map_addr - 0x8000) as usize];
 
-                let tile_addr = if signed_addressing {
-                    let id = tile_id as i8 as i16;
-                    ((tile_data_base as i32) + (id as i32) * 16) as u16
+                if self.cgb_mode {
+                    let attrs = self.vram[1][(map_addr - 0x8000) as usize];
+                    let vram_bank = if attrs & 0x08 != 0 { 1usize } else { 0usize };
+                    let palette_num = (attrs & 0x07) as usize;
+                    let x_flip = attrs & 0x20 != 0;
+                    let y_flip = attrs & 0x40 != 0;
+                    bg_tile_priority[px] = attrs & 0x80 != 0;
+
+                    let tile_y = if y_flip { 7 - tile_y_base } else { tile_y_base };
+                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
+                    let row_addr = (tile_addr - 0x8000) as usize + tile_y * 2;
+                    let lo = self.vram[vram_bank][row_addr];
+                    let hi = self.vram[vram_bank][row_addr + 1];
+
+                    let bit = if x_flip { tile_x } else { 7 - tile_x };
+                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                    bg_color_nonzero[px] = color_id != 0;
+                    line_rgb[px] = cgb_color(&self.bcpd, palette_num, color_id);
                 } else {
-                    tile_data_base + tile_id as u16 * 16
-                };
+                    let tile_addr = tile_addr(tile_data_base, tile_id, signed_addressing);
+                    let row_addr = (tile_addr - 0x8000) as usize + tile_y_base * 2;
+                    let lo = self.vram[0][row_addr];
+                    let hi = self.vram[0][row_addr + 1];
 
-                let row_addr = (tile_addr - 0x8000) as usize + tile_y * 2;
-                let lo = self.vram[0][row_addr];
-                let hi = self.vram[0][row_addr + 1];
-
-                let bit = 7 - tile_x;
-                let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
-                line_buf[px] = palette_color;
-                bg_priority[px] = color_id != 0;
+                    let bit = 7 - tile_x;
+                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                    let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
+                    bg_color_nonzero[px] = color_id != 0;
+                    line_rgb[px] = DMG_COLORS[palette_color as usize];
+                }
             }
         }
 
@@ -395,10 +431,12 @@ impl Ppu {
                 let sy = oam[base] as i32 - 16;
                 let flags = oam[base + 3];
                 let tile_id = oam[base + 2] & if sprite_height == 16 { 0xFE } else { 0xFF };
-                let palette = if flags & 0x10 != 0 { self.obp1 } else { self.obp0 };
                 let flip_x = flags & 0x20 != 0;
                 let flip_y = flags & 0x40 != 0;
                 let bg_over = flags & 0x80 != 0;
+
+                // GBC: tile VRAM bank from OAM byte 3 bit 3
+                let vram_bank = if self.cgb_mode && flags & 0x08 != 0 { 1usize } else { 0usize };
 
                 let mut tile_y = (line as i32 - sy) as usize;
                 if flip_y {
@@ -406,8 +444,8 @@ impl Ppu {
                 }
 
                 let row_addr = tile_id as usize * 16 + tile_y * 2;
-                let lo = self.vram[0][row_addr];
-                let hi = self.vram[0][row_addr + 1];
+                let lo = self.vram[vram_bank][row_addr];
+                let hi = self.vram[vram_bank][row_addr + 1];
 
                 for tile_x in 0..8usize {
                     let px = sx + tile_x as i32;
@@ -416,7 +454,14 @@ impl Ppu {
                     }
                     let px = px as usize;
 
-                    if bg_over && bg_priority[px] {
+                    // Priority: in GBC, OAM bit 7 OR bg tile attr bit 7 both cause BG to win
+                    // when LCDC bit 0 is set and BG pixel is non-zero. If LCDC bit 0 == 0,
+                    // sprites always win regardless.
+                    if self.cgb_mode {
+                        if self.lcdc & 0x01 != 0 && (bg_over || bg_tile_priority[px]) && bg_color_nonzero[px] {
+                            continue;
+                        }
+                    } else if bg_over && bg_color_nonzero[px] {
                         continue;
                     }
 
@@ -425,19 +470,56 @@ impl Ppu {
                     if color_id == 0 {
                         continue; // transparent
                     }
-                    let palette_color = (palette >> (color_id * 2)) & 0x03;
-                    line_buf[px] = palette_color;
+
+                    line_rgb[px] = if self.cgb_mode {
+                        // GBC: CGB palette from OAM byte 3 bits 0-2
+                        let palette_num = (flags & 0x07) as usize;
+                        cgb_color(&self.ocpd, palette_num, color_id)
+                    } else {
+                        let palette = if flags & 0x10 != 0 { self.obp1 } else { self.obp0 };
+                        let palette_color = (palette >> (color_id * 2)) & 0x03;
+                        DMG_COLORS[palette_color as usize]
+                    };
                 }
             }
         }
 
         // --- Write to framebuffer ---
         let fb_base = line * 160 * 3;
-        for (px, &color_idx) in line_buf.iter().enumerate() {
-            let rgb = DMG_COLORS[color_idx as usize];
+        for (px, rgb) in line_rgb.iter().enumerate() {
             self.framebuffer[fb_base + px * 3] = rgb[0];
             self.framebuffer[fb_base + px * 3 + 1] = rgb[1];
             self.framebuffer[fb_base + px * 3 + 2] = rgb[2];
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Free helper functions (module-level to avoid borrow conflicts on `self`)
+// ---------------------------------------------------------------------------
+
+/// Compute a tile's base address in GB memory space from its ID.
+#[inline(always)]
+fn tile_addr(data_base: u16, tile_id: u8, signed: bool) -> u16 {
+    if signed {
+        let id = tile_id as i8 as i16;
+        ((data_base as i32) + (id as i32) * 16) as u16
+    } else {
+        data_base + tile_id as u16 * 16
+    }
+}
+
+/// Decode a GBC 15-bit palette entry to 8-bit RGB.
+/// `palette_data` is the 64-byte BCPD or OCPD array.
+#[inline(always)]
+fn cgb_color(palette_data: &[u8; 64], palette_num: usize, color_id: u8) -> [u8; 3] {
+    let idx = palette_num * 8 + color_id as usize * 2;
+    let lo = palette_data[idx];
+    let hi = palette_data[idx + 1];
+    let val = (hi as u16) << 8 | lo as u16;
+    let r = (val & 0x1F) as u8;
+    let g = ((val >> 5) & 0x1F) as u8;
+    let b = ((val >> 10) & 0x1F) as u8;
+    // Scale 5-bit → 8-bit: multiply by 255/31 ≈ shift-left 3 + shift-right 2
+    [(r << 3) | (r >> 2), (g << 3) | (g >> 2), (b << 3) | (b >> 2)]
 }
