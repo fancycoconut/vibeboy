@@ -1,4 +1,5 @@
 use vibeboy::config::Config;
+use vibeboy::dmg_palette;
 use vibeboy::gameboy::GameBoy;
 use vibeboy::joypad::btn;
 use sdl2::event::Event;
@@ -58,7 +59,15 @@ fn main() {
         std::process::exit(1);
     });
 
-    let mut gb = GameBoy::new(rom);
+    let mut gb = GameBoy::new(rom.clone());
+
+    // For DMG ROMs, apply a colorisation palette (does nothing for GBC ROMs).
+    if !gb.bus.ppu.cgb_mode {
+        let title_bytes = rom.get(0x0134..=0x0143).unwrap_or(&[]);
+        let palette = dmg_palette::resolve(&config.display.dmg_palette, title_bytes);
+        gb.bus.ppu.apply_dmg_compat(palette);
+        println!("[DMG] colour palette: {}", &config.display.dmg_palette);
+    }
 
     // -------------------------------------------------------------------------
     // SDL2 setup

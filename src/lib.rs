@@ -1,4 +1,5 @@
 pub mod apu;
+pub mod dmg_palette;
 pub mod config;
 pub mod bus;
 pub mod cartridge;
