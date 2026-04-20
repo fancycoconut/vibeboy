@@ -387,7 +387,7 @@ impl Ch4 {
         if self.env_period == 0 {
             return;
         }
-        self.env_timer -= 1;
+        self.env_timer = self.env_timer.saturating_sub(1);
         if self.env_timer == 0 {
             self.env_timer = self.env_period;
             if self.env_add && self.volume < 15 {
