@@ -1,6 +1,8 @@
 [display]
 # Integer scale factor applied to the 160x144 Game Boy screen.
 scale = 3
+# or "green" | "grey" | "pocket" | "gblight" Omitting the key also defaults to "auto".
+dmg_palette = "auto"
 
 [keybindings]
 # SDL2 keycode names — see https://docs.rs/sdl2/latest/sdl2/keyboard/enum.Keycode.html
