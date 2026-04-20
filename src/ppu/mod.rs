@@ -44,6 +44,15 @@ pub struct Ppu {
     /// Interrupt flags to request (caller checks after each step)
     pub int_vblank: bool,
     pub int_stat: bool,
+
+    /// Set true for one step when the PPU enters HBlank (mode 0); cleared at
+    /// the start of each step.  Used by the bus to trigger HBlank DMA.
+    pub hblank_triggered: bool,
+
+    /// When true the DMG rendering paths route shade values through CGB palette
+    /// 0 (bcpd/ocpd) instead of the hardcoded DMG_COLORS table.  Set by
+    /// `apply_dmg_compat` for DMG ROMs running with a colorisation palette.
+    pub dmg_compat: bool,
 }
 
 /// DMG 4-shade palette (greenish).
@@ -81,7 +90,18 @@ impl Ppu {
             frame_ready: false,
             int_vblank: false,
             int_stat: false,
+            hblank_triggered: false,
+            dmg_compat: false,
         }
+    }
+
+    /// Enable DMG-compat colorisation by loading a `PaletteSet` into the CGB
+    /// palette registers and switching the DMG render paths to use them.
+    pub fn apply_dmg_compat(&mut self, palette: &crate::dmg_palette::PaletteSet) {
+        self.bcpd[0..8].copy_from_slice(&palette.bg);
+        self.ocpd[0..8].copy_from_slice(&palette.obj0);
+        self.ocpd[8..16].copy_from_slice(&palette.obj1);
+        self.dmg_compat = true;
     }
 
     // -----------------------------------------------------------------------
@@ -109,6 +129,15 @@ impl Ppu {
 
     pub fn vram_bank_write(&mut self, val: u8) {
         self.vram_bank = (val & 0x01) as usize;
+    }
+
+    /// Write to VRAM without the mode-3 access guard.
+    /// Used exclusively by HDMA/GDMA, which run outside CPU execution.
+    /// The address is masked to the 8KB bank window so overflowing transfers
+    /// wrap within VRAM rather than panicking.
+    pub fn vram_write_dma(&mut self, addr: u16, val: u8) {
+        let idx = (addr & 0x1FFF) as usize;
+        self.vram[self.vram_bank][idx] = val;
     }
 
     // -----------------------------------------------------------------------
@@ -201,6 +230,7 @@ impl Ppu {
     pub fn step(&mut self, cycles: u8, oam: &[u8; 0xA0]) {
         self.int_vblank = false;
         self.int_stat = false;
+        self.hblank_triggered = false;
 
         if self.lcdc & 0x80 == 0 {
             // LCD off
@@ -224,6 +254,7 @@ impl Ppu {
                     self.dot -= 172;
                     self.render_scanline(oam);
                     self.set_mode(0);
+                    self.hblank_triggered = true;
                     if self.stat & 0x08 != 0 {
                         self.int_stat = true;
                     }
@@ -362,9 +393,13 @@ impl Ppu {
             let hi = self.vram[0][row_addr + 1];
 
             let color_id = ((hi >> (7 - tile_x)) & 1) << 1 | ((lo >> (7 - tile_x)) & 1);
-            let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
+            let shade = (self.bgp >> (color_id * 2)) & 0x03;
             bg_color_nonzero[px] = color_id != 0;
-            line_rgb[px] = DMG_COLORS[palette_color as usize];
+            line_rgb[px] = if self.dmg_compat {
+                cgb_color(&self.bcpd, 0, shade)
+            } else {
+                DMG_COLORS[shade as usize]
+            };
         }
     }
 
@@ -440,9 +475,13 @@ impl Ppu {
             let hi = self.vram[0][row_addr + 1];
 
             let color_id = ((hi >> (7 - tile_x)) & 1) << 1 | ((lo >> (7 - tile_x)) & 1);
-            let palette_color = (self.bgp >> (color_id * 2)) & 0x03;
+            let shade = (self.bgp >> (color_id * 2)) & 0x03;
             bg_color_nonzero[px] = color_id != 0;
-            line_rgb[px] = DMG_COLORS[palette_color as usize];
+            line_rgb[px] = if self.dmg_compat {
+                cgb_color(&self.bcpd, 0, shade)
+            } else {
+                DMG_COLORS[shade as usize]
+            };
         }
     }
 
@@ -553,8 +592,13 @@ impl Ppu {
                 if color_id == 0 {
                     continue;
                 }
-                let palette_color = (palette >> (color_id * 2)) & 0x03;
-                line_rgb[px] = DMG_COLORS[palette_color as usize];
+                let shade = (palette >> (color_id * 2)) & 0x03;
+                let obj_palette_num = if flags & 0x10 != 0 { 1 } else { 0 };
+                line_rgb[px] = if self.dmg_compat {
+                    cgb_color(&self.ocpd, obj_palette_num, shade)
+                } else {
+                    DMG_COLORS[shade as usize]
+                };
             }
         }
     }

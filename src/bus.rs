@@ -36,6 +36,24 @@ pub struct Bus {
     pub interrupts: Interrupts,
     /// GBC work RAM bank (SVBK 0xFF70), 1–7
     wram_bank: u8,
+
+    // -----------------------------------------------------------------------
+    // GBC HDMA state (0xFF51–0xFF55)
+    // -----------------------------------------------------------------------
+    /// HDMA1–HDMA4: source/destination address registers as written by the game.
+    hdma1: u8, // source high byte
+    hdma2: u8, // source low byte  (bits 3-0 ignored → aligned to 16)
+    hdma3: u8, // dest high byte   (bits 7-5 ignored → VRAM 0x8000-0x9FFF)
+    hdma4: u8, // dest low byte    (bits 3-0 ignored → aligned to 16)
+    /// Running source pointer (updated as blocks are transferred).
+    hdma_src: u16,
+    /// Running destination pointer (updated as blocks are transferred).
+    hdma_dst: u16,
+    /// Remaining 16-byte blocks – 1.  0x7F means "idle / complete" so that
+    /// reading HDMA5 returns 0xFF when nothing is active.
+    hdma_remaining: u8,
+    /// True while an HBlank DMA is in progress (as opposed to one-shot GDMA).
+    hdma_active: bool,
 }
 
 impl Bus {
@@ -53,6 +71,14 @@ impl Bus {
             joypad: Joypad::new(),
             interrupts: Interrupts::new(),
             wram_bank: 1,
+            hdma1: 0xFF,
+            hdma2: 0xFF,
+            hdma3: 0xFF,
+            hdma4: 0xFF,
+            hdma_src: 0,
+            hdma_dst: 0x8000,
+            hdma_remaining: 0x7F,
+            hdma_active: false,
         }
     }
 
@@ -77,7 +103,19 @@ impl Bus {
             0xFF10..=0xFF3F => 0xFF, // APU — stub
             0xFF40..=0xFF4B => self.ppu.reg_read(addr),
             0xFF4F => self.ppu.vram_bank_read(),
-            0xFF51..=0xFF55 => 0xFF, // GBC DMA — stub
+            0xFF51 => self.hdma1,
+            0xFF52 => self.hdma2,
+            0xFF53 => self.hdma3,
+            0xFF54 => self.hdma4,
+            // HDMA5: bit 7 = 0 while HBlank DMA is active, 1 when idle/done.
+            // Bits 6-0 = remaining blocks – 1 (0x7F when idle → reads 0xFF).
+            0xFF55 => {
+                if self.hdma_active {
+                    self.hdma_remaining & 0x7F
+                } else {
+                    0x80 | self.hdma_remaining
+                }
+            }
             0xFF68..=0xFF6B => self.ppu.cgb_palette_read(addr),
             0xFF70 => self.wram_bank,
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
@@ -116,7 +154,11 @@ impl Bus {
             0xFF46 => self.oam_dma(val),
             0xFF40..=0xFF4B => self.ppu.reg_write(addr, val),
             0xFF4F => self.ppu.vram_bank_write(val),
-            0xFF51..=0xFF55 => {} // GBC DMA — stub
+            0xFF51 => self.hdma1 = val,
+            0xFF52 => self.hdma2 = val & 0xF0, // lower nibble ignored (16-byte alignment)
+            0xFF53 => self.hdma3 = val & 0x1F, // destination must be in VRAM 0x8000-0x9FFF
+            0xFF54 => self.hdma4 = val & 0xF0, // lower nibble ignored (16-byte alignment)
+            0xFF55 => self.write_hdma5(val),
             0xFF68..=0xFF6B => self.ppu.cgb_palette_write(addr, val),
             0xFF70 => self.wram_bank = if val & 0x07 == 0 { 1 } else { val & 0x07 },
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = val,
@@ -130,6 +172,73 @@ impl Bus {
         let src = (base as u16) << 8;
         for i in 0..0xA0u16 {
             self.oam[i as usize] = self.read(src + i);
+        }
+    }
+
+    /// Handle a write to HDMA5 (0xFF55): start GDMA, start HBlank DMA, or
+    /// cancel an in-progress HBlank DMA.
+    fn write_hdma5(&mut self, val: u8) {
+        if self.hdma_active && val & 0x80 == 0 {
+            // Cancel active HBlank DMA.  HDMA5 bit 7 becomes 1 (inactive) on
+            // next read; remaining block count is preserved.
+            self.hdma_active = false;
+            return;
+        }
+
+        // Compute source and destination from the four address registers.
+        // Source: HDMA1:HDMA2  (HDMA2 lower nibble already zeroed on write)
+        // Dest:   0x8000 | (HDMA3 & 0x1F) << 8 | HDMA4  (both aligned to 16)
+        self.hdma_src = (self.hdma1 as u16) << 8 | self.hdma2 as u16;
+        self.hdma_dst = 0x8000 | (self.hdma3 as u16) << 8 | self.hdma4 as u16;
+        self.hdma_remaining = val & 0x7F;
+
+        if val & 0x80 == 0 {
+            // General Purpose DMA — transfer all blocks immediately, then idle.
+            self.gdma_transfer();
+        } else {
+            // HBlank DMA — transfer one 16-byte block per HBlank.
+            self.hdma_active = true;
+        }
+    }
+
+    /// General Purpose DMA: copy all blocks in one shot (CPU is frozen on HW).
+    fn gdma_transfer(&mut self) {
+        loop {
+            self.hdma_copy_block();
+            if self.hdma_remaining == 0 {
+                break;
+            }
+            self.hdma_remaining -= 1;
+        }
+        self.hdma_remaining = 0x7F; // signal idle/complete
+    }
+
+    /// Called by `GameBoy::step` each time the PPU enters HBlank while an
+    /// HBlank DMA is active.  Transfers exactly one 16-byte block.
+    pub fn hdma_hblank_step(&mut self) {
+        if !self.hdma_active {
+            return;
+        }
+        self.hdma_copy_block();
+        if self.hdma_remaining == 0 {
+            self.hdma_active = false;
+            self.hdma_remaining = 0x7F; // signal complete
+        } else {
+            self.hdma_remaining -= 1;
+        }
+    }
+
+    /// Copy one 16-byte block from `hdma_src` → VRAM at `hdma_dst`, advancing
+    /// both pointers.
+    #[inline(always)]
+    fn hdma_copy_block(&mut self) {
+        for _ in 0..16u8 {
+            let src = self.hdma_src;
+            let dst = self.hdma_dst;
+            let val = self.read(src);
+            self.ppu.vram_write_dma(dst, val);
+            self.hdma_src = self.hdma_src.wrapping_add(1);
+            self.hdma_dst = self.hdma_dst.wrapping_add(1);
         }
     }
 
