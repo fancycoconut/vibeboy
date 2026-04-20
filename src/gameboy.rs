@@ -25,6 +25,7 @@ impl GameBoy {
         let cycles = self.cpu.step(&mut self.bus);
 
         self.bus.timer.step(cycles, &mut self.bus.interrupts);
+        self.bus.apu.step(cycles);
 
         let oam = self.bus.oam_snapshot();
         self.bus.ppu.step(cycles, &oam);

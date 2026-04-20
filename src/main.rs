@@ -1,7 +1,9 @@
+use vibeboy::apu::SAMPLE_RATE;
 use vibeboy::config::Config;
 use vibeboy::dmg_palette;
 use vibeboy::gameboy::GameBoy;
 use vibeboy::joypad::btn;
+use sdl2::audio::AudioSpecDesired;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
@@ -75,6 +77,17 @@ fn main() {
     let sdl = sdl2::init().expect("SDL2 init failed");
     let video = sdl.video().expect("SDL2 video init failed");
 
+    let audio_subsystem = sdl.audio().expect("SDL2 audio init failed");
+    let desired_spec = AudioSpecDesired {
+        freq: Some(SAMPLE_RATE as i32),
+        channels: Some(2),
+        samples: Some(1024),
+    };
+    let audio_queue: sdl2::audio::AudioQueue<f32> = audio_subsystem
+        .open_queue(None, &desired_spec)
+        .expect("Failed to open audio queue");
+    audio_queue.resume();
+
     let window = video
         .window("Vibeboy", width, height)
         .position_centered()
@@ -128,6 +141,12 @@ fn main() {
                 dst.copy_from_slice(framebuffer.as_slice());
             })
             .expect("Texture lock failed");
+
+        // Queue audio samples — cap queue size (~1 s) to avoid latency buildup
+        let samples = gb.bus.apu.drain_samples();
+        if audio_queue.size() < SAMPLE_RATE * 2 * 4 {
+            audio_queue.queue_audio(&samples).ok();
+        }
 
         canvas.clear();
         canvas.copy(&texture, None, None).expect("Texture copy failed");
