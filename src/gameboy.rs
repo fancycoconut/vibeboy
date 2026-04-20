@@ -29,6 +29,11 @@ impl GameBoy {
         let oam = self.bus.oam_snapshot();
         self.bus.ppu.step(cycles, &oam);
 
+        // Fire one HBlank DMA block each time the PPU enters HBlank.
+        if self.bus.ppu.hblank_triggered {
+            self.bus.hdma_hblank_step();
+        }
+
         if self.bus.ppu.int_vblank {
             self.bus.interrupts.request(0);
         }

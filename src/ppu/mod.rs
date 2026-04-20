@@ -44,6 +44,10 @@ pub struct Ppu {
     /// Interrupt flags to request (caller checks after each step)
     pub int_vblank: bool,
     pub int_stat: bool,
+
+    /// Set true for one step when the PPU enters HBlank (mode 0); cleared at
+    /// the start of each step.  Used by the bus to trigger HBlank DMA.
+    pub hblank_triggered: bool,
 }
 
 /// DMG 4-shade palette (greenish).
@@ -81,6 +85,7 @@ impl Ppu {
             frame_ready: false,
             int_vblank: false,
             int_stat: false,
+            hblank_triggered: false,
         }
     }
 
@@ -109,6 +114,15 @@ impl Ppu {
 
     pub fn vram_bank_write(&mut self, val: u8) {
         self.vram_bank = (val & 0x01) as usize;
+    }
+
+    /// Write to VRAM without the mode-3 access guard.
+    /// Used exclusively by HDMA/GDMA, which run outside CPU execution.
+    /// The address is masked to the 8KB bank window so overflowing transfers
+    /// wrap within VRAM rather than panicking.
+    pub fn vram_write_dma(&mut self, addr: u16, val: u8) {
+        let idx = (addr & 0x1FFF) as usize;
+        self.vram[self.vram_bank][idx] = val;
     }
 
     // -----------------------------------------------------------------------
@@ -201,6 +215,7 @@ impl Ppu {
     pub fn step(&mut self, cycles: u8, oam: &[u8; 0xA0]) {
         self.int_vblank = false;
         self.int_stat = false;
+        self.hblank_triggered = false;
 
         if self.lcdc & 0x80 == 0 {
             // LCD off
@@ -224,6 +239,7 @@ impl Ppu {
                     self.dot -= 172;
                     self.render_scanline(oam);
                     self.set_mode(0);
+                    self.hblank_triggered = true;
                     if self.stat & 0x08 != 0 {
                         self.int_stat = true;
                     }
