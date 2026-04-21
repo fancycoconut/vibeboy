@@ -43,23 +43,24 @@ impl Timer {
     }
 
     /// Advance timer by `cycles` (machine cycles = T-cycles / 4).
-    /// Returns true if a timer interrupt should be requested.
     pub fn step(&mut self, cycles: u8, interrupts: &mut Interrupts) {
-        let t_cycles = cycles as u16 * 4;
-        for _ in 0..t_cycles {
-            self.div_counter = self.div_counter.wrapping_add(1);
+        let t_cycles = cycles as u32 * 4;
+        let prev = self.div_counter as u32;
+        self.div_counter = self.div_counter.wrapping_add(t_cycles as u16);
 
-            if self.tac & 0x04 != 0 {
-                // Check if the selected bit just fell (DIV bit that drives TIMA)
-                let bit = Self::tac_to_div_bit(self.tac & 0x03);
-                let fell = self.div_counter & (1 << bit) == 0
-                    && self.div_counter.wrapping_sub(1) & (1 << bit) != 0;
-                if fell {
-                    self.tima = self.tima.wrapping_add(1);
-                    if self.tima == 0 {
-                        self.tima = self.tma;
-                        interrupts.request(2); // Timer interrupt
-                    }
+        if self.tac & 0x04 != 0 {
+            // Count falling edges on the selected DIV bit. A falling edge on bit B
+            // occurs at every multiple of 2^(B+1), so we count how many such
+            // multiples fall in the half-open interval (prev, prev + t_cycles].
+            let bit = Self::tac_to_div_bit(self.tac & 0x03) as u32;
+            let period = 1u32 << (bit + 1);
+            let next = prev + t_cycles; // safe in u32; t_cycles is at most 24
+            let falling_edges = next / period - prev / period;
+            for _ in 0..falling_edges {
+                self.tima = self.tima.wrapping_add(1);
+                if self.tima == 0 {
+                    self.tima = self.tma;
+                    interrupts.request(2);
                 }
             }
         }
