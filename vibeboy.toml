@@ -1,8 +1,10 @@
 [display]
 # Integer scale factor applied to the 160x144 Game Boy screen.
 scale = 3
-# or "green" | "grey" | "pocket" | "gblight" Omitting the key also defaults to "auto".
-dmg_palette = "auto"
+# How DMG (non-GBC) ROMs are rendered: "color" (GBC-style colorization) or "grey" (original tones).
+dmg_mode = "color"
+# Palette used in "color" mode: "auto" (GBC boot ROM title-hash) | "green" | "grey".
+dmg_palette = "grey"
 
 [keybindings]
 # SDL2 keycode names — see https://docs.rs/sdl2/latest/sdl2/keyboard/enum.Keycode.html

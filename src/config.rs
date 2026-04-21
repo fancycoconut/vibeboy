@@ -10,11 +10,20 @@ pub struct Config {
 pub struct DisplayConfig {
     /// Integer scale factor applied to the 160×144 Game Boy screen.
     pub scale: u32,
-    /// Palette used when running a DMG (non-GBC) ROM.
+    /// How DMG (non-GBC) ROMs are rendered.
+    /// "color" — apply GBC-style colorization palettes (default).
+    /// "grey"  — render in the original Game Boy green/grey tones.
+    #[serde(default = "default_dmg_mode")]
+    pub dmg_mode: String,
+    /// Palette used in "color" mode.
     /// "auto" reproduces the GBC bootstrap ROM title-hash selection.
-    /// Other options: "green", "grey", "pocket", "gblight".
+    /// Other options: "green", "grey".
     #[serde(default = "default_dmg_palette")]
     pub dmg_palette: String,
+}
+
+fn default_dmg_mode() -> String {
+    "color".into()
 }
 
 fn default_dmg_palette() -> String {
@@ -39,7 +48,7 @@ pub struct KeyBindings {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            display: DisplayConfig { scale: 3, dmg_palette: "auto".into() },
+            display: DisplayConfig { scale: 3, dmg_mode: "color".into(), dmg_palette: "auto".into() },
             keybindings: KeyBindings {
                 right:  "Right".into(),
                 left:   "Left".into(),
