@@ -1,10 +1,12 @@
 mod mbc0;
 mod mbc1;
 mod mbc3;
+mod mbc5;
 
 pub use mbc0::Mbc0;
 pub use mbc1::Mbc1;
 pub use mbc3::Mbc3;
+pub use mbc5::Mbc5;
 
 /// Common interface for all cartridge types.
 pub trait Cartridge {
@@ -59,6 +61,7 @@ pub fn load(rom: Vec<u8>) -> Box<dyn Cartridge> {
         0x00 => Box::new(Mbc0::new(rom)),
         0x01..=0x03 => Box::new(Mbc1::new(rom, header.ram_size)),
         0x0F..=0x13 => Box::new(Mbc3::new(rom, header.ram_size)),
+        0x19..=0x1E => Box::new(Mbc5::new(rom, header.ram_size)),
         t => panic!("Unsupported cartridge type: 0x{t:02X}"),
     }
 }
