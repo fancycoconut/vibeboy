@@ -6,3 +6,6 @@
 # ROMs
 *.gb
 *.gbc
+
+# macOS
+.DS_Store
