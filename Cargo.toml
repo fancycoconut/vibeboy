@@ -3,7 +3,15 @@ name = "vibeboy"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
+sdl2 = { version = "0.37", features = ["bundled"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
 sdl2 = { version = "0.37" }
+
+[profile.test]
+opt-level = 3
+
+[dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

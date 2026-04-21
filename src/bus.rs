@@ -1,3 +1,4 @@
+use crate::apu::Apu;
 use crate::cartridge::{self, Cartridge};
 use crate::interrupts::Interrupts;
 use crate::joypad::Joypad;
@@ -30,6 +31,7 @@ pub struct Bus {
     /// Accumulates every byte transferred via serial (0xFF02 write 0x81).
     /// Used by integration tests to capture blargg output without stdout.
     pub serial_buf: Vec<u8>,
+    pub apu: Apu,
     pub ppu: Ppu,
     pub timer: Timer,
     pub joypad: Joypad,
@@ -66,6 +68,7 @@ impl Bus {
             serial_data: 0,
             serial_ctrl: 0,
             serial_buf: Vec::new(),
+            apu: Apu::new(),
             ppu: Ppu::new(),
             timer: Timer::new(),
             joypad: Joypad::new(),
@@ -100,7 +103,7 @@ impl Bus {
             0xFF02 => self.serial_ctrl,
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.flags,
-            0xFF10..=0xFF3F => 0xFF, // APU — stub
+            0xFF10..=0xFF3F => self.apu.read(addr),
             0xFF40..=0xFF4B => self.ppu.reg_read(addr),
             0xFF4F => self.ppu.vram_bank_read(),
             0xFF51 => self.hdma1,
@@ -150,7 +153,7 @@ impl Bus {
             }
             0xFF04..=0xFF07 => self.timer.write(addr, val),
             0xFF0F => self.interrupts.flags = val,
-            0xFF10..=0xFF3F => {} // APU — stub
+            0xFF10..=0xFF3F => self.apu.write(addr, val),
             0xFF46 => self.oam_dma(val),
             0xFF40..=0xFF4B => self.ppu.reg_write(addr, val),
             0xFF4F => self.ppu.vram_bank_write(val),
