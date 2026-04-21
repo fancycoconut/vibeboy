@@ -4,7 +4,7 @@ scale = 3
 # How DMG (non-GBC) ROMs are rendered: "color" (GBC-style colorization) or "grey" (original tones).
 dmg_mode = "color"
 # Palette used in "color" mode: "auto" (GBC boot ROM title-hash) | "green" | "grey".
-dmg_palette = "grey"
+dmg_palette = "auto"
 
 [keybindings]
 # SDL2 keycode names — see https://docs.rs/sdl2/latest/sdl2/keyboard/enum.Keycode.html

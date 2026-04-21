@@ -64,6 +64,12 @@ const GREEN_SCREEN: PaletteSet = {
     PaletteSet { bg: p, obj0: p, obj1: p }
 };
 
+/// Neutral greyscale palette (white → light grey → dark grey → black).
+const NEUTRAL_GREY: PaletteSet = {
+    let p = pack([0x7FFF, 0x56B5, 0x318C, 0x0000]);
+    PaletteSet { bg: p, obj0: p, obj1: p }
+};
+
 struct Entry {
     sum:  u8,
     bg:   u8,
@@ -178,12 +184,12 @@ pub fn auto_palette(title_bytes: &[u8]) -> PaletteSet {
             return ps(bg, obj0, obj1);
         }
     }
-    ps(0, 0, 0)
+    NEUTRAL_GREY
 }
 
 pub fn resolve(name: &str, title_bytes: &[u8]) -> PaletteSet {
     match name {
-        "grey"  => ps(0, 0, 0),
+        "grey"  => NEUTRAL_GREY,
         "green" => GREEN_SCREEN,
         _       => auto_palette(title_bytes),
     }
