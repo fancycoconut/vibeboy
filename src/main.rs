@@ -63,11 +63,11 @@ fn main() {
 
     let mut gb = GameBoy::new(rom.clone());
 
-    // For DMG ROMs, apply a colorisation palette (does nothing for GBC ROMs).
-    if !gb.bus.ppu.cgb_mode {
+    // For DMG ROMs, optionally apply GBC-style colorization.
+    if !gb.bus.ppu.cgb_mode && config.display.dmg_mode != "grey" {
         let title_bytes = rom.get(0x0134..=0x0143).unwrap_or(&[]);
         let palette = dmg_palette::resolve(&config.display.dmg_palette, title_bytes);
-        gb.bus.ppu.apply_dmg_compat(palette);
+        gb.bus.ppu.apply_dmg_compat(&palette);
         println!("[DMG] colour palette: {}", &config.display.dmg_palette);
     }
 

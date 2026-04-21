@@ -1,30 +1,5 @@
-/// DMG-compatibility color palettes for Game Boy (non-GBC) ROMs running on a
-/// GBC-capable emulator.
-///
-/// Each `PaletteSet` contains three 4-color palettes — BG, OBJ0, OBJ1 — stored
-/// as raw bytes ready to be written directly into the PPU's `bcpd`/`ocpd`
-/// arrays (GBC 15-bit little-endian format, 2 bytes per color, 8 bytes per
-/// palette).
-///
-/// # Auto selection
-///
-/// `resolve("auto", title_bytes)` reproduces the Game Boy Color bootstrap ROM
-/// behavior: it sums the 16 title bytes from the ROM header (0x0134–0x0143)
-/// mod 256, looks the checksum up in a table, and returns the matching palette.
-/// An optional secondary check on the 4th title byte (ROM[0x0137]) resolves
-/// games that share a checksum.  Unknown checksums fall back to greyscale.
-///
-/// # Named palettes
-///
-/// `resolve("green"|"grey"|"pocket"|"gblight", _)` returns a fixed palette
-/// regardless of the game title.
+/// Accurate GBC DMG-compatibility palettes decoded from the GBC boot ROM binary.
 
-// ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
-
-/// Three 4-color palettes (BG, OBJ0, OBJ1) in GBC 15-bit format.
-/// Each array is 8 bytes: 4 colors × 2 bytes (little-endian u16).
 #[derive(Clone, Copy)]
 pub struct PaletteSet {
     pub bg:   [u8; 8],
@@ -32,11 +7,6 @@ pub struct PaletteSet {
     pub obj1: [u8; 8],
 }
 
-// ---------------------------------------------------------------------------
-// Const helpers
-// ---------------------------------------------------------------------------
-
-/// Pack four 15-bit GBC colors into the 8-byte bcpd/ocpd layout.
 const fn pack(c: [u16; 4]) -> [u8; 8] {
     [
         c[0] as u8, (c[0] >> 8) as u8,
@@ -46,199 +16,181 @@ const fn pack(c: [u16; 4]) -> [u8; 8] {
     ]
 }
 
-/// Build a PaletteSet where all three sub-palettes share the same 4 colors.
-const fn mono(c: [u16; 4]) -> PaletteSet {
-    let p = pack(c);
+const RAW: [[u16; 4]; 35] = [
+    [0x7FFF, 0x32BF, 0x00D0, 0x0000], // 0
+    [0x639F, 0x4279, 0x15B0, 0x04CB], // 1
+    [0x7FFF, 0x6E31, 0x454A, 0x0000], // 2
+    [0x7FFF, 0x1BEF, 0x0200, 0x0000], // 3
+    [0x7FFF, 0x421F, 0x1CF2, 0x0000], // 4
+    [0x7FFF, 0x5294, 0x294A, 0x0000], // 5
+    [0x7FFF, 0x03FF, 0x012F, 0x0000], // 6
+    [0x7FFF, 0x03EF, 0x01D6, 0x0000], // 7
+    [0x7FFF, 0x42B5, 0x3DC8, 0x0000], // 8
+    [0x7E74, 0x03FF, 0x0180, 0x0000], // 9
+    [0x67FF, 0x77AC, 0x1A13, 0x2D6B], // 10
+    [0x7ED6, 0x4BFF, 0x2175, 0x0000], // 11
+    [0x53FF, 0x4A5F, 0x7E52, 0x0000], // 12
+    [0x4FFF, 0x7ED2, 0x3A4C, 0x1CE0], // 13
+    [0x03ED, 0x7FFF, 0x255F, 0x0000], // 14
+    [0x036A, 0x021F, 0x03FF, 0x7FFF], // 15
+    [0x7FFF, 0x01DF, 0x0112, 0x0000], // 16
+    [0x231F, 0x035F, 0x00F2, 0x0009], // 17
+    [0x7FFF, 0x03EA, 0x011F, 0x0000], // 18
+    [0x299F, 0x001A, 0x000C, 0x0000], // 19
+    [0x7FFF, 0x027F, 0x001F, 0x0000], // 20
+    [0x7FFF, 0x03E0, 0x0206, 0x0120], // 21
+    [0x7FFF, 0x7EEB, 0x001F, 0x7C00], // 22
+    [0x7FFF, 0x3FFF, 0x7E00, 0x001F], // 23
+    [0x7FFF, 0x03FF, 0x001F, 0x0000], // 24
+    [0x03FF, 0x001F, 0x000C, 0x0000], // 25
+    [0x7FFF, 0x033F, 0x0193, 0x0000], // 26
+    [0x0000, 0x4200, 0x037F, 0x7FFF], // 27
+    [0x7FFF, 0x7E8C, 0x7C00, 0x0000], // 28
+    [0x7FFF, 0x1BEF, 0x6180, 0x0000], // 29
+    [0x7FFF, 0x7C00, 0x03E0, 0x7C1F], // 30
+    [0x001F, 0x03FF, 0x4140, 0x2042], // 31
+    [0x2221, 0x8180, 0x1082, 0x1211], // 32
+    [0xB012, 0xB879, 0x16AD, 0x0717], // 33
+    [0x05BA, 0x137C, 0x0000, 0x0000], // 34
+];
+
+const fn ps(bg: usize, obj0: usize, obj1: usize) -> PaletteSet {
+    PaletteSet { bg: pack(RAW[bg]), obj0: pack(RAW[obj0]), obj1: pack(RAW[obj1]) }
+}
+
+/// Classic DMG green-screen palette (matches the hardcoded DMG_COLORS in the PPU).
+const GREEN_SCREEN: PaletteSet = {
+    let p = pack([0x73DC, 0x46D1, 0x1986, 0x0461]);
     PaletteSet { bg: p, obj0: p, obj1: p }
-}
+};
 
-/// Build a PaletteSet with distinct BG, OBJ0, OBJ1 sub-palettes.
-const fn ps(bg: [u16; 4], obj0: [u16; 4], obj1: [u16; 4]) -> PaletteSet {
-    PaletteSet { bg: pack(bg), obj0: pack(obj0), obj1: pack(obj1) }
-}
+/// Neutral greyscale palette (white → light grey → dark grey → black).
+const NEUTRAL_GREY: PaletteSet = {
+    let p = pack([0x7FFF, 0x56B5, 0x318C, 0x0000]);
+    PaletteSet { bg: p, obj0: p, obj1: p }
+};
 
-// ---------------------------------------------------------------------------
-// 15-bit color constants (B<<10 | G<<5 | R, 5 bits each)
-// ---------------------------------------------------------------------------
-// Greyscale ramps
-const WHITE:      u16 = 0x7FFF; // R=31 G=31 B=31 → #FFFFFF
-const LGREY:      u16 = 0x56B5; // R=21 G=21 B=21 → #ADADAD
-const DGREY:      u16 = 0x318C; // R=12 G=12 B=12 → #636363
-const BLACK:      u16 = 0x0000;
-
-// Greens (matches the existing DMG_COLORS in ppu/mod.rs)
-const G0: u16 = 0x73DC; // #E0F0E0 lightest
-const G1: u16 = 0x46D1; // #88B088
-const G2: u16 = 0x1986; // #306030
-const G3: u16 = 0x0461; // #081808 darkest
-
-// ---------------------------------------------------------------------------
-// Palette set table (indices 0–12)
-// ---------------------------------------------------------------------------
-
-/// 13 palette sets.  Index 0 is the greyscale fallback; the rest cover the
-/// colour families seen across GBC bootstrap palette groups.
-pub static PALETTES: [PaletteSet; 13] = [
-    // 0 — grey (default / fallback)
-    mono([WHITE, LGREY, DGREY, BLACK]),
-
-    // 1 — original DMG green screen
-    mono([G0, G1, G2, G3]),
-
-    // 2 — warm red  (#FFE8C0 → #E06020 → #803000 → #200000)
-    mono([0x63FF, 0x119C, 0x00D0, 0x0004]),
-
-    // 3 — cool blue  (#E0F0FF → #4090E0 → #102080 → #000010)
-    mono([0x7FDC, 0x7248, 0x4082, 0x0800]),
-
-    // 4 — yellow / gold  (#FFFFE0 → #F0C000 → #806000 → #201000)
-    mono([0x73FF, 0x031E, 0x0190, 0x0044]),
-
-    // 5 — teal / cyan  (#E0FFF8 → #20C0A0 → #006848 → #001820)
-    mono([0x7FFC, 0x5304, 0x25A0, 0x1060]),
-
-    // 6 — pink / purple  (#FFE8FF → #E060C0 → #801060 → #100020)
-    mono([0x7FBF, 0x619C, 0x3050, 0x1002]),
-
-    // 7 — earth / brown  (#F0E8C0 → #C09848 → #604808 → #180800)
-    mono([0x639E, 0x2678, 0x052C, 0x0023]),
-
-    // 8 — orange  (#FFFFC0 → #FF8000 → #C04000 → #280000)
-    mono([0x63FF, 0x021F, 0x0118, 0x0005]),
-
-    // 9 — lavender / cool purple  (#F0E8FF → #9070E0 → #402080 → #100018)
-    mono([0x7FBE, 0x7192, 0x4088, 0x0C02]),
-
-    // 10 — sea green  (#E0FFF0 → #40D080 → #008050 → #001818)
-    mono([0x7BFC, 0x4348, 0x2A00, 0x0C60]),
-
-    // 11 — Game Boy Pocket  (#C8CDA8 → #8B9570 → #4E5440 → #1F1F1F)
-    mono([0x5739, 0x3A51, 0x2149, 0x0C63]),
-
-    // 12 — Game Boy Light / neon yellow  (#FFFF80 → #D0C020 → #886020 → #201000)
-    ps(
-        [0x43FF, 0x131A, 0x1191, 0x0044], // BG
-        [0x43FF, 0x131A, 0x1191, 0x0044], // OBJ0
-        [WHITE,  LGREY,  DGREY,  BLACK],  // OBJ1 neutral
-    ),
-];
-
-// ---------------------------------------------------------------------------
-// GBC Bootstrap ROM title-checksum hash table
-// ---------------------------------------------------------------------------
-// Derived from the GBC bootstrap ROM disassembly.
-// Format: (title_checksum, palette_idx, optional_4th_title_byte_for_disambiguation)
-// When the optional field is Some((byte_value, alt_idx)), compare ROM[0x0137]
-// against byte_value; if equal, use alt_idx instead of palette_idx.
-
-struct HashEntry {
+struct Entry {
     sum:  u8,
-    idx:  u8,
-    /// (title[3] value, alternate palette index)
-    alt:  Option<(u8, u8)>,
+    bg:   u8,
+    obj0: u8,
+    obj1: u8,
+    alt:  Option<(u8, u8, u8, u8)>,
 }
 
-const fn he(sum: u8, idx: u8) -> HashEntry {
-    HashEntry { sum, idx, alt: None }
+const fn e(sum: u8, bg: u8, obj0: u8, obj1: u8) -> Entry {
+    Entry { sum, bg, obj0, obj1, alt: None }
 }
-const fn he2(sum: u8, idx: u8, check: u8, alt_idx: u8) -> HashEntry {
-    HashEntry { sum, idx, alt: Some((check, alt_idx)) }
+const fn ea(sum: u8, bg: u8, obj0: u8, obj1: u8, d: u8, a_bg: u8, a_obj0: u8, a_obj1: u8) -> Entry {
+    Entry { sum, bg, obj0, obj1, alt: Some((d, a_bg, a_obj0, a_obj1)) }
 }
 
-static HASH_TABLE: &[HashEntry] = &[
-    // Grey / neutral
-    he(0x00, 0),  he(0x5C, 0),  he(0x61, 0),  he(0x86, 0),
-    he(0x8B, 0),  he(0xF8, 0),
-
-    // Green family (classic game look)
-    he(0x10, 1),  he(0x1D, 1),  he(0x88, 1),  he(0x98, 1),
-
-    // Warm red / fire
-    he(0x01, 2),  he(0x08, 2),  he(0x9A, 2),  he(0xA5, 2),
-
-    // Cool blue
-    he(0x43, 3),  he(0x47, 3),  he(0x54, 3),
-    he2(0x39, 7, b'S', 3),
-    he2(0x49, 7, b'S', 3),
-    he2(0xEF, 7, b'S', 3),
-
-    // Yellow / gold
-    he(0x1B, 4),  he(0x1C, 4),  he(0x1E, 4),  he(0x28, 4),
-
-    // Teal / cyan
-    he(0x67, 5),  he(0x72, 5),  he(0xD0, 5),
-    he2(0x99, 5, b'L', 10),
-
-    // Pink / purple
-    he(0x75, 6),  he(0x7E, 6),  he(0xCF, 6),  he(0x33, 6),
-
-    // Earth / brown
-    he(0x0D, 7),  he(0x31, 7),  he(0x92, 7),  he(0x9A, 7),
-
-    // Orange
-    he(0x52, 8),  he(0x59, 8),  he(0xE9, 8),  he(0x70, 8),
-
-    // Lavender / pastel
-    he(0x35, 9),  he(0x7D, 9),  he(0xB7, 9),
-
-    // Sea green
-    he(0x51, 10), he(0x7C, 10), he(0xE0, 10),
-
-    // GBC Pocket palette
-    he(0xF1, 11),
-
-    // GBC Light / neon
-    he2(0x57, 12, b'O', 4),
-    he2(0x60, 12, b'A', 0),
-
-    // Disambiguation-only entries that share a sum with an entry above
-    he(0x0E, 4),   // Tetris — yellow/gold family
+static TABLE: &[Entry] = &[
+    e(0x00,  4, 29, 28),
+    e(0x88,  9, 19, 22),
+    e(0x16,  0,  3, 28),
+    e(0x36, 27,  4, 15),
+    e(0xD1, 27,  0, 14),
+    e(0xDB, 24, 28, 22),
+    e(0xF2, 22, 24, 28),
+    e(0x3C, 23,  4, 28),
+    e(0x8C,  8, 22, 16),
+    e(0x92,  0,  3, 28),
+    e(0x3D,  4, 18, 22),
+    e(0x5C, 19, 22,  9),
+    e(0x58,  5,  5,  5),
+    e(0xC9, 16, 28, 10),
+    e(0x3E, 22, 20,  4),
+    e(0x70, 21, 28,  4),
+    e(0x1D, 19,  9, 22),
+    e(0x59, 16, 22,  8),
+    e(0x69, 22, 24, 28),
+    e(0x19,  4, 20, 22),
+    e(0x35,  0,  3, 28),
+    e(0xA8, 17,  4, 13),
+    e(0x14,  4, 28,  3),
+    e(0xAA, 29, 28,  4),
+    e(0x75,  0,  3, 28),
+    e(0x95, 22, 18,  4),
+    e(0x99,  0,  3, 28),
+    e(0x34,  4,  7,  4),
+    e(0x6F, 26, 26, 26),
+    e(0x15, 24, 28, 22),
+    e(0xFF, 20,  4, 22),
+    e(0x97, 28,  0,  3),
+    e(0x4B,  4,  3, 28),
+    e(0x90,  4,  3, 28),
+    e(0x17,  4, 28,  3),
+    e(0x10, 28,  3,  0),
+    e(0x39, 28,  0,  3),
+    e(0xF7,  3, 28,  0),
+    e(0xF6, 28,  3,  0),
+    e(0xA2,  3, 28,  0),
+    e(0x49, 19, 22,  9),
+    e(0x4E,  4, 23, 28),
+    e(0x43, 28,  0,  3),
+    e(0x68, 28,  3,  0),
+    e(0xE0, 22, 20,  4),
+    e(0x8B,  4, 28,  3),
+    e(0xF0, 27,  0, 14),
+    e(0xCE, 27,  0, 14),
+    e(0x0C,  0,  3, 28),
+    e(0x29, 28,  3,  0),
+    e(0xE8, 27,  4,  3),
+    e(0xB7,  0,  3, 28),
+    e(0x86, 17,  4, 13),
+    e(0x9A,  4,  3, 28),
+    e(0x52, 28,  3,  0),
+    e(0x01, 28,  3,  0),
+    e(0x9D,  4,  0,  2),
+    e(0x71, 20,  4, 22),
+    e(0x9C, 22, 17,  2),
+    e(0xBD,  4,  3, 28),
+    e(0x5D, 28,  3,  0),
+    e(0x6D, 28,  3,  0),
+    e(0x67,  0,  3, 28),
+    e(0x3F,  4, 29, 28),
+    e(0x6B, 17, 22,  2),
+    ea(0xB3, 19, 22,  9,  0x42,  4, 28, 29),
+    ea(0x46,  3, 11,  3,  0x45, 16,  8, 22),
+    ea(0x28,  4,  3, 28,  0x46, 25,  3, 28),
+    ea(0xA5, 27,  4,  3,  0x41, 27,  4,  3),
+    ea(0xC6, 16, 22,  8,  0x41,  3,  0, 28),
+    ea(0xD3,  2,  0,  4,  0x52,  4, 29, 28),
+    ea(0x27, 19, 22,  9,  0x42,  0, 28,  8),
+    ea(0x61, 28, 23,  4,  0x45,  4, 28,  3),
+    ea(0x18, 17, 22,  2,  0x4B,  4, 28,  3),
+    ea(0x66,  4,  7,  4,  0x45,  4, 29, 28),
+    ea(0x6A, 17, 22,  2,  0x4B,  4, 29, 28),
+    ea(0xBF,  4,  2,  0,  0x20,  4, 18, 22),
+    ea(0x0D, 22, 24, 28,  0x52, 27,  0, 14),
 ];
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Compute the GBC bootstrap title checksum: sum of ROM bytes 0x0134–0x0143 mod 256.
 pub fn title_checksum(title_bytes: &[u8]) -> u8 {
-    title_bytes
-        .iter()
-        .take(16)
-        .fold(0u8, |acc, &b| acc.wrapping_add(b))
+    title_bytes.iter().take(16).fold(0u8, |a, &b| a.wrapping_add(b))
 }
 
-/// Look up the palette for a DMG ROM by title bytes (ROM[0x0134..=0x0143]).
-pub fn auto_palette(title_bytes: &[u8]) -> &'static PaletteSet {
+pub fn auto_palette(title_bytes: &[u8]) -> PaletteSet {
     let sum   = title_checksum(title_bytes);
     let byte3 = title_bytes.get(3).copied().unwrap_or(0);
-
-    for entry in HASH_TABLE {
+    for entry in TABLE {
         if entry.sum == sum {
-            let idx = match entry.alt {
-                Some((check, alt)) if byte3 == check => alt as usize,
-                _ => entry.idx as usize,
+            let (bg, obj0, obj1) = match entry.alt {
+                Some((d, a_bg, a_obj0, a_obj1)) if byte3 == d => {
+                    (a_bg as usize, a_obj0 as usize, a_obj1 as usize)
+                }
+                _ => (entry.bg as usize, entry.obj0 as usize, entry.obj1 as usize),
             };
-            return &PALETTES[idx.min(PALETTES.len() - 1)];
+            return ps(bg, obj0, obj1);
         }
     }
-
-    &PALETTES[0] // unknown title → greyscale
+    NEUTRAL_GREY
 }
 
-/// Resolve a palette from the configuration string.
-///
-/// - `"auto"`    — GBC bootstrap ROM title-hash lookup (default)
-/// - `"green"`   — original DMG green screen
-/// - `"grey"`    — neutral greyscale
-/// - `"pocket"`  — Game Boy Pocket warm grey
-/// - `"gblight"` — Game Boy Light neon yellow
-/// - anything else falls back to `"auto"`
-pub fn resolve<'a>(name: &str, title_bytes: &[u8]) -> &'static PaletteSet {
+pub fn resolve(name: &str, title_bytes: &[u8]) -> PaletteSet {
     match name {
-        "green"   => &PALETTES[1],
-        "grey"    => &PALETTES[0],
-        "pocket"  => &PALETTES[11],
-        "gblight" => &PALETTES[12],
-        _         => auto_palette(title_bytes), // "auto" or unknown
+        "grey"  => NEUTRAL_GREY,
+        "green" => GREEN_SCREEN,
+        _       => auto_palette(title_bytes),
     }
 }
