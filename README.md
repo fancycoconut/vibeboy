@@ -9,6 +9,10 @@ Game Boy (DMG + GBC) emulator written in Rust.
 
 SDL2 is compiled from source automatically via the `bundled` feature — no system SDL2 installation needed.
 
+For macOS, please install via `homebrew` with:
+
+> $ brew install sdl2
+
 ## Building
 
 ```bash
