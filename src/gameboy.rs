@@ -16,6 +16,7 @@ impl GameBoy {
             bus: Bus::new(rom),
         };
         gb.bus.ppu.cgb_mode = is_gbc;
+        gb.bus.apu.cgb_mode = is_gbc;
         gb
     }
 
