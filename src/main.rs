@@ -8,6 +8,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 // How much audio to keep buffered before throttling (~4 frames at 59.73 Hz).
@@ -47,6 +48,55 @@ fn resolve_quit_key(name: &str) -> Keycode {
     })
 }
 
+/// Create a GameBoy from ROM bytes, applying DMG colorization if configured.
+fn make_gameboy(rom: &[u8], config: &Config) -> GameBoy {
+    let mut gb = GameBoy::new(rom.to_vec());
+    if !gb.bus.ppu.cgb_mode && config.display.dmg_mode != "grey" {
+        let title_bytes = rom.get(0x0134..=0x0143).unwrap_or(&[]);
+        let palette = dmg_palette::resolve(&config.display.dmg_palette, title_bytes);
+        gb.bus.ppu.apply_dmg_compat(&palette);
+        println!("[DMG] colour palette: {}", &config.display.dmg_palette);
+    }
+    gb
+}
+
+/// Save the current cartridge RAM to disk, then load a new ROM from `path`.
+/// Returns the new GameBoy and its .sav path, or None on read failure.
+fn switch_rom(
+    gb: &mut GameBoy,
+    current_sav: &PathBuf,
+    new_rom_path: &str,
+    config: &Config,
+) -> Option<(GameBoy, PathBuf)> {
+    // Persist the current game before switching.
+    let sav_data = gb.bus.cartridge.save_ram();
+    if !sav_data.is_empty() {
+        match std::fs::write(current_sav, &sav_data) {
+            Ok(()) => println!("[Save] Wrote save to {}", current_sav.display()),
+            Err(e) => eprintln!("[Save] Failed to write {}: {e}", current_sav.display()),
+        }
+    }
+
+    let rom = match std::fs::read(new_rom_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[Load] Failed to read ROM '{new_rom_path}': {e}");
+            return None;
+        }
+    };
+
+    let new_sav_path = std::path::Path::new(new_rom_path).with_extension("sav");
+    let mut new_gb = make_gameboy(&rom, config);
+
+    if let Ok(sav) = std::fs::read(&new_sav_path) {
+        new_gb.bus.cartridge.load_ram(&sav);
+        println!("[Save] Loaded save from {}", new_sav_path.display());
+    }
+
+    println!("[Load] Loaded ROM: {new_rom_path}");
+    Some((new_gb, new_sav_path))
+}
+
 fn main() {
     let config = Config::load();
 
@@ -65,14 +115,12 @@ fn main() {
         std::process::exit(1);
     });
 
-    let mut gb = GameBoy::new(rom.clone());
+    let mut sav_path: PathBuf = std::path::Path::new(rom_path).with_extension("sav");
+    let mut gb = make_gameboy(&rom, &config);
 
-    // For DMG ROMs, optionally apply GBC-style colorization.
-    if !gb.bus.ppu.cgb_mode && config.display.dmg_mode != "grey" {
-        let title_bytes = rom.get(0x0134..=0x0143).unwrap_or(&[]);
-        let palette = dmg_palette::resolve(&config.display.dmg_palette, title_bytes);
-        gb.bus.ppu.apply_dmg_compat(&palette);
-        println!("[DMG] colour palette: {}", &config.display.dmg_palette);
+    if let Ok(sav) = std::fs::read(&sav_path) {
+        gb.bus.cartridge.load_ram(&sav);
+        println!("[Save] Loaded save from {}", sav_path.display());
     }
 
     // -------------------------------------------------------------------------
@@ -118,6 +166,13 @@ fn main() {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => break 'running,
+                Event::DropFile { filename, .. } => {
+                    if let Some((new_gb, new_sav)) = switch_rom(&mut gb, &sav_path, &filename, &config) {
+                        gb = new_gb;
+                        sav_path = new_sav;
+                        audio_queue.clear();
+                    }
+                }
                 Event::KeyDown { keycode: Some(kc), .. } => {
                     if kc == quit_kc {
                         break 'running;
@@ -159,6 +214,14 @@ fn main() {
         // or OS sleep precision.
         while audio_queue.size() > AUDIO_TARGET_BYTES {
             std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    let sav_data = gb.bus.cartridge.save_ram();
+    if !sav_data.is_empty() {
+        match std::fs::write(&sav_path, &sav_data) {
+            Ok(()) => println!("[Save] Wrote save to {}", sav_path.display()),
+            Err(e) => eprintln!("[Save] Failed to write {}: {e}", sav_path.display()),
         }
     }
 }

@@ -96,4 +96,13 @@ impl Cartridge for Mbc1 {
             *b = val;
         }
     }
+
+    fn save_ram(&self) -> Vec<u8> {
+        self.ram.clone()
+    }
+
+    fn load_ram(&mut self, data: &[u8]) {
+        let len = self.ram.len().min(data.len());
+        self.ram[..len].copy_from_slice(&data[..len]);
+    }
 }

@@ -14,6 +14,10 @@ pub trait Cartridge {
     fn write(&mut self, addr: u16, val: u8);
     fn ram_read(&self, addr: u16) -> u8;
     fn ram_write(&mut self, addr: u16, val: u8);
+    /// Serialize external RAM (and any RTC state) for saving to disk.
+    fn save_ram(&self) -> Vec<u8>;
+    /// Restore external RAM (and any RTC state) from saved data.
+    fn load_ram(&mut self, data: &[u8]);
 }
 
 /// Parsed Game Boy cartridge header (0x0100–0x014F).

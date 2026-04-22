@@ -267,4 +267,28 @@ impl Cartridge for Mbc3 {
             _ => {}
         }
     }
+
+    fn save_ram(&self) -> Vec<u8> {
+        let mut data = self.ram.clone();
+        // Append RTC state: origin(8) + halted(1) + halt_ts(8) + carry(1) = 18 bytes
+        data.extend_from_slice(&self.rtc.origin.to_le_bytes());
+        data.push(self.rtc.halted as u8);
+        data.extend_from_slice(&self.rtc.halt_ts.to_le_bytes());
+        data.push(self.rtc.carry as u8);
+        data
+    }
+
+    fn load_ram(&mut self, data: &[u8]) {
+        let ram_len = self.ram.len();
+        let len = ram_len.min(data.len());
+        self.ram[..len].copy_from_slice(&data[..len]);
+        // Parse RTC state if present after RAM bytes
+        let rtc_data = &data[ram_len.min(data.len())..];
+        if rtc_data.len() >= 18 {
+            self.rtc.origin   = u64::from_le_bytes(rtc_data[0..8].try_into().unwrap());
+            self.rtc.halted   = rtc_data[8] != 0;
+            self.rtc.halt_ts  = u64::from_le_bytes(rtc_data[9..17].try_into().unwrap());
+            self.rtc.carry    = rtc_data[17] != 0;
+        }
+    }
 }
