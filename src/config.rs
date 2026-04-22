@@ -20,6 +20,9 @@ pub struct DisplayConfig {
     /// Other options: "green", "grey".
     #[serde(default = "default_dmg_palette")]
     pub dmg_palette: String,
+    /// Whether to show the terminal/console window alongside the emulator (Windows only).
+    #[serde(default = "default_show_terminal")]
+    pub windows_os_show_terminal: bool,
 }
 
 fn default_dmg_mode() -> String {
@@ -28,6 +31,10 @@ fn default_dmg_mode() -> String {
 
 fn default_dmg_palette() -> String {
     "auto".into()
+}
+
+fn default_show_terminal() -> bool {
+    true
 }
 
 /// Maps each Game Boy input to an SDL2 keycode name string.
@@ -48,7 +55,7 @@ pub struct KeyBindings {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            display: DisplayConfig { scale: 3, dmg_mode: "color".into(), dmg_palette: "auto".into() },
+            display: DisplayConfig { scale: 3, dmg_mode: "color".into(), dmg_palette: "auto".into(), windows_os_show_terminal: true },
             keybindings: KeyBindings {
                 right:  "Right".into(),
                 left:   "Left".into(),
