@@ -5,6 +5,8 @@ scale = 3
 dmg_mode = "color"
 # Palette used in "color" mode: "auto" (GBC boot ROM title-hash) | "green" | "grey".
 dmg_palette = "auto"
+# Show the terminal/console window alongside the emulator (Windows only). Set to false to hide it.
+windows_os_show_terminal = true
 
 [keybindings]
 # SDL2 keycode names — see https://docs.rs/sdl2/latest/sdl2/keyboard/enum.Keycode.html

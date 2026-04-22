@@ -97,8 +97,14 @@ fn switch_rom(
     Some((new_gb, new_sav_path))
 }
 
+#[cfg(windows)]
+mod windows;
+
 fn main() {
     let config = Config::load();
+
+    #[cfg(windows)]
+    windows::apply_terminal_visibility(config.display.windows_os_show_terminal);
 
     let scale  = config.display.scale;
     let width  = 160 * scale;
