@@ -25,4 +25,10 @@ impl Cartridge for Mbc0 {
     }
 
     fn ram_write(&mut self, _addr: u16, _val: u8) {}
+
+    fn save_ram(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn load_ram(&mut self, _data: &[u8]) {}
 }
