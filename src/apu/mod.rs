@@ -134,6 +134,9 @@ struct Ch1 {
     sweep_timer: u8,
     sweep_enabled: bool,
     shadow_freq: u16,
+    // Tracks whether negate mode was used in a calculation since last trigger.
+    // Exiting negate mode after a calculation disables the channel.
+    used_negate: bool,
 }
 
 impl Ch1 {
@@ -146,12 +149,14 @@ impl Ch1 {
             sweep_timer: 8,
             sweep_enabled: false,
             shadow_freq: 0,
+            used_negate: false,
         }
     }
 
-    fn calc_sweep_freq(&self) -> u16 {
+    fn calc_sweep_freq(&mut self) -> u16 {
         let shifted = self.shadow_freq >> self.sweep_shift;
         if self.sweep_negate {
+            self.used_negate = true;
             self.shadow_freq.saturating_sub(shifted)
         } else {
             self.shadow_freq.saturating_add(shifted)
@@ -163,6 +168,7 @@ impl Ch1 {
         self.shadow_freq = self.sq.freq;
         self.sweep_timer = if self.sweep_period == 0 { 8 } else { self.sweep_period };
         self.sweep_enabled = self.sweep_period != 0 || self.sweep_shift != 0;
+        self.used_negate = false;
         if self.sweep_shift != 0 && self.calc_sweep_freq() > 2047 {
             self.sq.enabled = false;
         }
@@ -175,13 +181,13 @@ impl Ch1 {
         if self.sweep_timer == 0 {
             self.sweep_timer = if self.sweep_period == 0 { 8 } else { self.sweep_period };
             if self.sweep_enabled && self.sweep_period != 0 {
+                // Overflow check always happens. Frequency update only when shift != 0.
                 let new_freq = self.calc_sweep_freq();
                 if new_freq > 2047 {
                     self.sq.enabled = false;
-                } else {
+                } else if self.sweep_shift != 0 {
                     self.shadow_freq = new_freq;
                     self.sq.freq = new_freq;
-                    // Second overflow check after writing back
                     if self.calc_sweep_freq() > 2047 {
                         self.sq.enabled = false;
                     }
@@ -202,6 +208,8 @@ struct Ch3 {
     freq_timer: u32,
     wave_pos: u8,    // 0-31 (index into 32 4-bit samples)
     wave_ram: [u8; 16],
+    // After trigger the first timer expiry reloads the counter but doesn't advance wave_pos.
+    skip_next_advance: bool,
 }
 
 impl Ch3 {
@@ -216,6 +224,7 @@ impl Ch3 {
             freq_timer: 4096,
             wave_pos: 0,
             wave_ram: [0; 16],
+            skip_next_advance: false,
         }
     }
 
@@ -236,7 +245,11 @@ impl Ch3 {
             if rem >= self.freq_timer {
                 rem -= self.freq_timer;
                 self.freq_timer = reload;
-                self.wave_pos = (self.wave_pos + 1) & 31;
+                if self.skip_next_advance {
+                    self.skip_next_advance = false;
+                } else {
+                    self.wave_pos = (self.wave_pos + 1) & 31;
+                }
             } else {
                 self.freq_timer -= rem;
                 rem = 0;
@@ -265,6 +278,7 @@ impl Ch3 {
         }
         self.freq_timer = self.freq_reload();
         self.wave_pos = 0;
+        self.skip_next_advance = true;
         if !self.dac_on {
             self.enabled = false;
         }
@@ -408,6 +422,7 @@ pub struct Apu {
     nr50: u8,
     nr51: u8,
     power: bool,
+    pub cgb_mode: bool,
 
     fs_counter: u32, // T-cycles until next frame sequencer step
     fs_step: u8,     // 0-7
@@ -431,6 +446,7 @@ impl Apu {
             nr50: 0,
             nr51: 0,
             power: false,
+            cgb_mode: false,
             fs_counter: FS_PERIOD,
             fs_step: 0,
             sample_acc: 0.0,
@@ -547,10 +563,9 @@ impl Apu {
     }
 
     pub fn read(&self, addr: u16) -> u8 {
-        // When power is off, registers read as 0xFF except NR52 and wave RAM
-        if !self.power && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
-            return 0xFF;
-        }
+        // When power is off, registers read as their zero-state masked values (not plain 0xFF).
+        // Wave RAM and NR52 are always accessible.
+        // Channel registers have their constant 1-bits applied over zero channel state.
         match addr {
             // CH1
             0xFF10 => {
@@ -606,22 +621,47 @@ impl Apu {
                     | (self.ch1.sq.enabled as u8);
                 0x70 | ((self.power as u8) << 7) | ch_bits
             }
-            // Wave RAM
-            0xFF30..=0xFF3F => self.ch3.wave_ram[(addr - 0xFF30) as usize],
+            // Wave RAM: if CH3 is active, any read returns the currently-playing byte (both DMG and GBC)
+            0xFF30..=0xFF3F => {
+                if self.ch3.enabled {
+                    self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize]
+                } else {
+                    self.ch3.wave_ram[(addr - 0xFF30) as usize]
+                }
+            }
             _ => 0xFF,
         }
     }
 
     pub fn write(&mut self, addr: u16, val: u8) {
         if !self.power && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
+            // On DMG, NRx1 length counter writes still work while APU is off
+            if !self.cgb_mode {
+                match addr {
+                    0xFF11 => self.ch1.sq.length_counter = 64 - (val & 0x3F),
+                    0xFF16 => self.ch2.length_counter = 64 - (val & 0x3F),
+                    0xFF1B => self.ch3.length_counter = 256 - val as u16,
+                    0xFF20 => self.ch4.length_counter = 64 - (val & 0x3F),
+                    _ => {}
+                }
+            }
             return;
         }
         match addr {
             // CH1
             0xFF10 => {
+                let prev_negate = self.ch1.sweep_negate;
                 self.ch1.sweep_period = (val >> 4) & 7;
                 self.ch1.sweep_negate = val & 0x08 != 0;
                 self.ch1.sweep_shift = val & 7;
+                // Exiting negate mode after a calculation was made disables the channel.
+                // Only applies when the channel is currently enabled (not stale state from
+                // a prior trigger session that already ended with overflow).
+                if prev_negate && !self.ch1.sweep_negate && self.ch1.used_negate
+                    && self.ch1.sq.enabled
+                {
+                    self.ch1.sq.enabled = false;
+                }
             }
             0xFF11 => {
                 self.ch1.sq.duty = (val >> 6) & 3;
@@ -640,10 +680,20 @@ impl Apu {
                 self.ch1.sq.freq = (self.ch1.sq.freq & 0x700) | val as u16;
             }
             0xFF14 => {
+                let prev_len_en = self.ch1.sq.length_enable;
+                let trigger = val & 0x80 != 0;
                 self.ch1.sq.freq = (self.ch1.sq.freq & 0x00FF) | ((val as u16 & 7) << 8);
                 self.ch1.sq.length_enable = val & 0x40 != 0;
-                if val & 0x80 != 0 {
+                let extra = self.ch1.sq.length_enable && self.fs_step & 1 == 1 && !prev_len_en;
+                if extra {
+                    self.ch1.sq.step_length();
+                }
+                if trigger {
+                    let pre = self.ch1.sq.length_counter;
                     self.ch1.trigger();
+                    if pre == 0 && self.ch1.sq.length_enable && self.fs_step & 1 == 1 {
+                        self.ch1.sq.step_length();
+                    }
                 }
             }
             // CH2
@@ -665,10 +715,20 @@ impl Apu {
                 self.ch2.freq = (self.ch2.freq & 0x700) | val as u16;
             }
             0xFF19 => {
+                let prev_len_en = self.ch2.length_enable;
+                let trigger = val & 0x80 != 0;
                 self.ch2.freq = (self.ch2.freq & 0x00FF) | ((val as u16 & 7) << 8);
                 self.ch2.length_enable = val & 0x40 != 0;
-                if val & 0x80 != 0 {
+                let extra = self.ch2.length_enable && self.fs_step & 1 == 1 && !prev_len_en;
+                if extra {
+                    self.ch2.step_length();
+                }
+                if trigger {
+                    let pre = self.ch2.length_counter;
                     self.ch2.trigger();
+                    if pre == 0 && self.ch2.length_enable && self.fs_step & 1 == 1 {
+                        self.ch2.step_length();
+                    }
                 }
             }
             // CH3
@@ -688,10 +748,27 @@ impl Apu {
                 self.ch3.freq = (self.ch3.freq & 0x700) | val as u16;
             }
             0xFF1E => {
+                let prev_len_en = self.ch3.length_enable;
+                let trigger = val & 0x80 != 0;
                 self.ch3.freq = (self.ch3.freq & 0x00FF) | ((val as u16 & 7) << 8);
                 self.ch3.length_enable = val & 0x40 != 0;
-                if val & 0x80 != 0 {
+                let extra = self.ch3.length_enable && self.fs_step & 1 == 1 && !prev_len_en;
+                if extra {
+                    self.ch3.step_length();
+                }
+                if trigger {
+                    let was_enabled = self.ch3.enabled;
+                    let prev_timer = self.ch3.freq_timer;
+                    let pre = self.ch3.length_counter;
                     self.ch3.trigger();
+                    // DMG: retrigger while active doesn't reset the frequency timer
+                    if !self.cgb_mode && was_enabled {
+                        self.ch3.freq_timer = prev_timer;
+                        self.ch3.skip_next_advance = false;
+                    }
+                    if pre == 0 && self.ch3.length_enable && self.fs_step & 1 == 1 {
+                        self.ch3.step_length();
+                    }
                 }
             }
             // CH4
@@ -714,9 +791,19 @@ impl Apu {
                 self.ch4.divisor_code = val & 7;
             }
             0xFF23 => {
+                let prev_len_en = self.ch4.length_enable;
+                let trigger = val & 0x80 != 0;
                 self.ch4.length_enable = val & 0x40 != 0;
-                if val & 0x80 != 0 {
+                let extra = self.ch4.length_enable && self.fs_step & 1 == 1 && !prev_len_en;
+                if extra {
+                    self.ch4.step_length();
+                }
+                if trigger {
+                    let pre = self.ch4.length_counter;
                     self.ch4.trigger();
+                    if pre == 0 && self.ch4.length_enable && self.fs_step & 1 == 1 {
+                        self.ch4.step_length();
+                    }
                 }
             }
             // Master control
@@ -729,9 +816,13 @@ impl Apu {
                 }
                 self.power = new_power;
             }
-            // Wave RAM
+            // Wave RAM: on DMG, if CH3 is active, writes go to currently-playing byte
             0xFF30..=0xFF3F => {
-                self.ch3.wave_ram[(addr - 0xFF30) as usize] = val;
+                if self.ch3.enabled && !self.cgb_mode {
+                    self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize] = val;
+                } else {
+                    self.ch3.wave_ram[(addr - 0xFF30) as usize] = val;
+                }
             }
             _ => {}
         }
@@ -739,11 +830,20 @@ impl Apu {
 
     fn power_off(&mut self) {
         let wave_ram = self.ch3.wave_ram;
+        // On DMG, length counters survive power-off. On GBC they are cleared.
+        let lc1 = if !self.cgb_mode { self.ch1.sq.length_counter } else { 0 };
+        let lc2 = if !self.cgb_mode { self.ch2.length_counter } else { 0 };
+        let lc3 = if !self.cgb_mode { self.ch3.length_counter } else { 0 };
+        let lc4 = if !self.cgb_mode { self.ch4.length_counter } else { 0 };
         self.ch1 = Ch1::new();
         self.ch2 = SquareCh::new();
         self.ch3 = Ch3::new();
-        self.ch3.wave_ram = wave_ram; // wave RAM survives power-off
         self.ch4 = Ch4::new();
+        self.ch1.sq.length_counter = lc1;
+        self.ch2.length_counter = lc2;
+        self.ch3.length_counter = lc3;
+        self.ch4.length_counter = lc4;
+        self.ch3.wave_ram = wave_ram;
         self.nr50 = 0;
         self.nr51 = 0;
         self.fs_step = 0;
