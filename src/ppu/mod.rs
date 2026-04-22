@@ -35,6 +35,7 @@ pub struct Ppu {
     // Internal state
     dot: u16,                  // dot counter within current scanline (0–455)
     pub mode: u8,              // current PPU mode (0–3)
+    wly: u8,                   // window internal line counter; increments only when window renders
 
     /// Completed frame framebuffer: 160×144 pixels, 3 bytes (RGB) each.
     pub framebuffer: Box<[u8; 160 * 144 * 3]>,
@@ -86,6 +87,7 @@ impl Ppu {
             cgb_mode: false,
             dot: 0,
             mode: 2,
+            wly: 0,
             framebuffer: Box::new([0; 160 * 144 * 3]),
             frame_ready: false,
             int_vblank: false,
@@ -270,6 +272,7 @@ impl Ppu {
                         self.set_mode(1);
                         self.int_vblank = true;
                         self.frame_ready = true;
+                        self.wly = 0;
                         if self.stat & 0x10 != 0 {
                             self.int_stat = true;
                         }
@@ -340,11 +343,13 @@ impl Ppu {
         }
 
         if self.lcdc & 0x20 != 0 && line >= self.wy as usize {
+            let wly = self.wly as usize;
             if self.cgb_mode {
-                self.draw_window_cgb(line, &mut line_rgb, &mut bg_color_nonzero, &mut bg_tile_priority);
+                self.draw_window_cgb(wly, &mut line_rgb, &mut bg_color_nonzero, &mut bg_tile_priority);
             } else {
-                self.draw_window_dmg(line, &mut line_rgb, &mut bg_color_nonzero);
+                self.draw_window_dmg(wly, &mut line_rgb, &mut bg_color_nonzero);
             }
+            self.wly = self.wly.saturating_add(1);
         }
 
         if self.lcdc & 0x02 != 0 {
@@ -450,7 +455,7 @@ impl Ppu {
 
     fn draw_window_dmg(
         &self,
-        line: usize,
+        wly: usize,
         line_rgb: &mut [[u8; 3]; 160],
         bg_color_nonzero: &mut [bool; 160],
     ) {
@@ -459,9 +464,8 @@ impl Ppu {
         let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
         let signed = self.lcdc & 0x10 == 0;
 
-        let y = line - self.wy as usize;
-        let tile_row = y / 8;
-        let tile_y = y % 8;
+        let tile_row = wly / 8;
+        let tile_y = wly % 8;
 
         for px in wx..160usize {
             let x = px - wx;
@@ -487,7 +491,7 @@ impl Ppu {
 
     fn draw_window_cgb(
         &self,
-        line: usize,
+        wly: usize,
         line_rgb: &mut [[u8; 3]; 160],
         bg_color_nonzero: &mut [bool; 160],
         bg_tile_priority: &mut [bool; 160],
@@ -497,9 +501,8 @@ impl Ppu {
         let tile_data_base: u16 = if self.lcdc & 0x10 != 0 { 0x8000 } else { 0x9000 };
         let signed = self.lcdc & 0x10 == 0;
 
-        let y = line - self.wy as usize;
-        let tile_row = y / 8;
-        let tile_y_base = y % 8;
+        let tile_row = wly / 8;
+        let tile_y_base = wly % 8;
 
         for px in wx..160usize {
             let x = px - wx;
