@@ -208,8 +208,11 @@ struct Ch3 {
     freq_timer: u32,
     wave_pos: u8,    // 0-31 (index into 32 4-bit samples)
     wave_ram: [u8; 16],
-    // After trigger the first timer expiry reloads the counter but doesn't advance wave_pos.
+    // DMG only: after trigger the first timer expiry reloads the counter but doesn't advance wave_pos.
     skip_next_advance: bool,
+    // T-cycle timestamp of the last wave RAM access (advance or skip) by the APU.
+    // Used for the DMG timing window: CPU reads only see real data within 2 T-cycles of this.
+    last_wave_access_tc: u64,
 }
 
 impl Ch3 {
@@ -225,6 +228,7 @@ impl Ch3 {
             wave_pos: 0,
             wave_ram: [0; 16],
             skip_next_advance: false,
+            last_wave_access_tc: 0,
         }
     }
 
@@ -232,7 +236,7 @@ impl Ch3 {
         (2048u32.saturating_sub(self.freq as u32)) * 2
     }
 
-    fn tick(&mut self, tcycles: u32) {
+    fn tick(&mut self, tcycles: u32, tc_base: u64) {
         if !self.enabled {
             return;
         }
@@ -245,6 +249,9 @@ impl Ch3 {
             if rem >= self.freq_timer {
                 rem -= self.freq_timer;
                 self.freq_timer = reload;
+                // Record when the APU accessed wave RAM (elapsed = tcycles consumed so far).
+                let elapsed = (tcycles - rem) as u64;
+                self.last_wave_access_tc = tc_base + elapsed;
                 if self.skip_next_advance {
                     self.skip_next_advance = false;
                 } else {
@@ -278,7 +285,7 @@ impl Ch3 {
         }
         self.freq_timer = self.freq_reload();
         self.wave_pos = 0;
-        self.skip_next_advance = true;
+        self.skip_next_advance = false;
         if !self.dac_on {
             self.enabled = false;
         }
@@ -434,6 +441,8 @@ pub struct Apu {
     hp_cap_r: f32,
 
     pub samples: Vec<f32>, // Stereo interleaved (L, R, L, R, ...)
+
+    tcycle_count: u64, // Total T-cycles elapsed; used for wave RAM access timing window
 }
 
 impl Apu {
@@ -453,6 +462,7 @@ impl Apu {
             hp_cap_l: 0.0,
             hp_cap_r: 0.0,
             samples: Vec::with_capacity(2048),
+            tcycle_count: 0,
         };
         // Post-boot-ROM APU state (skipping boot ROM)
         apu.write(0xFF26, 0xF1); // NR52: power on
@@ -469,11 +479,14 @@ impl Apu {
         }
 
         let tc = cycles as u32 * 4;
+        let tc_base = self.tcycle_count;
 
         self.ch1.sq.tick(tc);
         self.ch2.tick(tc);
-        self.ch3.tick(tc);
+        self.ch3.tick(tc, tc_base);
         self.ch4.tick(tc);
+
+        self.tcycle_count += tc as u64;
 
         // Advance frame sequencer
         if tc < self.fs_counter {
@@ -621,10 +634,20 @@ impl Apu {
                     | (self.ch1.sq.enabled as u8);
                 0x70 | ((self.power as u8) << 7) | ch_bits
             }
-            // Wave RAM: if CH3 is active, any read returns the currently-playing byte (both DMG and GBC)
             0xFF30..=0xFF3F => {
                 if self.ch3.enabled {
-                    self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize]
+                    if self.cgb_mode {
+                        // GBC: always returns currently-playing byte
+                        self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize]
+                    } else {
+                        // DMG: only accessible within 2 T-cycles of the APU's wave RAM access
+                        let elapsed = self.tcycle_count.saturating_sub(self.ch3.last_wave_access_tc);
+                        if elapsed <= 2 {
+                            self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize]
+                        } else {
+                            0xFF
+                        }
+                    }
                 } else {
                     self.ch3.wave_ram[(addr - 0xFF30) as usize]
                 }
@@ -761,10 +784,15 @@ impl Apu {
                     let prev_timer = self.ch3.freq_timer;
                     let pre = self.ch3.length_counter;
                     self.ch3.trigger();
-                    // DMG: retrigger while active doesn't reset the frequency timer
-                    if !self.cgb_mode && was_enabled {
-                        self.ch3.freq_timer = prev_timer;
-                        self.ch3.skip_next_advance = false;
+                    if !self.cgb_mode {
+                        if was_enabled {
+                            // DMG retrigger while active: keep old freq_timer, no advance skip
+                            self.ch3.freq_timer = prev_timer;
+                            self.ch3.skip_next_advance = false;
+                        } else {
+                            // DMG fresh trigger: first timer expiry is a "warm-up" that doesn't advance
+                            self.ch3.skip_next_advance = true;
+                        }
                     }
                     if pre == 0 && self.ch3.length_enable && self.fs_step & 1 == 1 {
                         self.ch3.step_length();
