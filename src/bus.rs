@@ -20,7 +20,7 @@ use crate::timer::Timer;
 ///   0xFF80–0xFFFE  High RAM (HRAM)
 ///   0xFFFF         Interrupt Enable register
 pub struct Bus {
-    cartridge: Box<dyn Cartridge>,
+    pub cartridge: Box<dyn Cartridge>,
     wram: [u8; 0x8000], // 32KB — banks 0-7 (GBC), bank 0+1 only for DMG
     hram: [u8; 0x7F],
     pub oam: [u8; 0xA0],
