@@ -8,9 +8,13 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-const FRAME_DURATION: Duration = Duration::from_nanos(16_742_706); // ~59.73 Hz
+// How much audio to keep buffered before throttling (~4 frames at 59.73 Hz).
+// The audio hardware clock at 44100 Hz becomes the emulation speed reference.
+const AUDIO_TARGET_BYTES: u32 = SAMPLE_RATE * 2 * 4 * 4 / 60;
+// Hard cap (~200 ms) to prevent latency build-up if the audio device stalls.
+const AUDIO_MAX_BYTES: u32 = SAMPLE_RATE * 2 * 4 / 5;
 
 fn build_keymap(kb: &vibeboy::config::KeyBindings) -> HashMap<Keycode, usize> {
     [
@@ -97,7 +101,6 @@ fn main() {
     let mut canvas = window
         .into_canvas()
         .accelerated()
-        .present_vsync()
         .build()
         .expect("Canvas creation failed");
 
@@ -111,8 +114,6 @@ fn main() {
     // -------------------------------------------------------------------------
     // Main loop
     // -------------------------------------------------------------------------
-    let mut frame_start = Instant::now();
-
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -142,9 +143,9 @@ fn main() {
             })
             .expect("Texture lock failed");
 
-        // Queue audio samples — cap queue size (~1 s) to avoid latency buildup
+        // Queue audio, dropping only if the device has stalled beyond the hard cap.
         let samples = gb.bus.apu.drain_samples();
-        if audio_queue.size() < SAMPLE_RATE * 2 * 4 {
+        if audio_queue.size() < AUDIO_MAX_BYTES {
             audio_queue.queue_audio(&samples).ok();
         }
 
@@ -152,10 +153,12 @@ fn main() {
         canvas.copy(&texture, None, None).expect("Texture copy failed");
         canvas.present();
 
-        let elapsed = frame_start.elapsed();
-        if elapsed < FRAME_DURATION {
-            std::thread::sleep(FRAME_DURATION - elapsed);
+        // Throttle emulation to the audio hardware clock. When the queue holds
+        // more than ~4 frames of audio, sleep until it drains to that level.
+        // This keeps the emulator at exactly 59.73 Hz without relying on vsync
+        // or OS sleep precision.
+        while audio_queue.size() > AUDIO_TARGET_BYTES {
+            std::thread::sleep(Duration::from_millis(1));
         }
-        frame_start = Instant::now();
     }
 }
