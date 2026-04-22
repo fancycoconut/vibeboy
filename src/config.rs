@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub display: DisplayConfig,
     pub keybindings: KeyBindings,
+    /// Enable or disable audio output. Defaults to true.
+    #[serde(default = "default_sound_enabled")]
+    pub sound_enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,6 +40,10 @@ fn default_show_terminal() -> bool {
     true
 }
 
+fn default_sound_enabled() -> bool {
+    true
+}
+
 /// Maps each Game Boy input to an SDL2 keycode name string.
 /// See: https://docs.rs/sdl2/latest/sdl2/keyboard/enum.Keycode.html
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +63,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             display: DisplayConfig { scale: 3, dmg_mode: "color".into(), dmg_palette: "auto".into(), windows_os_show_terminal: true },
+            sound_enabled: true,
             keybindings: KeyBindings {
                 right:  "Right".into(),
                 left:   "Left".into(),

@@ -1,3 +1,5 @@
+sound_enabled = true
+
 [display]
 # Integer scale factor applied to the 160x144 Game Boy screen.
 scale = 3
