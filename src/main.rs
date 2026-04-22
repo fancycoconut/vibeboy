@@ -65,7 +65,14 @@ fn main() {
         std::process::exit(1);
     });
 
+    let sav_path = std::path::Path::new(rom_path).with_extension("sav");
+
     let mut gb = GameBoy::new(rom.clone());
+
+    if let Ok(sav) = std::fs::read(&sav_path) {
+        gb.bus.cartridge.load_ram(&sav);
+        println!("[Save] Loaded save from {}", sav_path.display());
+    }
 
     // For DMG ROMs, optionally apply GBC-style colorization.
     if !gb.bus.ppu.cgb_mode && config.display.dmg_mode != "grey" {
@@ -159,6 +166,14 @@ fn main() {
         // or OS sleep precision.
         while audio_queue.size() > AUDIO_TARGET_BYTES {
             std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    let sav_data = gb.bus.cartridge.save_ram();
+    if !sav_data.is_empty() {
+        match std::fs::write(&sav_path, &sav_data) {
+            Ok(()) => println!("[Save] Wrote save to {}", sav_path.display()),
+            Err(e) => eprintln!("[Save] Failed to write {}: {e}", sav_path.display()),
         }
     }
 }
