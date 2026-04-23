@@ -57,6 +57,7 @@ pub struct KeyBindings {
     pub start: String,
     pub select: String,
     pub quit: String,
+    pub speedup: String,
 }
 
 impl Default for Config {
@@ -74,6 +75,7 @@ impl Default for Config {
                 start:  "Return".into(),
                 select: "LShift".into(),
                 quit:   "Escape".into(),
+                speedup: "D".into(),
             },
         }
     }
