@@ -17,6 +17,22 @@ const AUDIO_TARGET_BYTES: u32 = SAMPLE_RATE * 2 * 4 * 4 / 60;
 // Hard cap (~200 ms) to prevent latency build-up if the audio device stalls.
 const AUDIO_MAX_BYTES: u32 = SAMPLE_RATE * 2 * 4 / 5;
 
+fn update_title_fps(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    fps_frame_count: &mut u32,
+    fps_timer: &mut Instant,
+    frames_to_run: u32,
+) {
+    *fps_frame_count += frames_to_run;
+    if fps_timer.elapsed() >= Duration::from_secs(1) {
+        let fps = *fps_frame_count as f64 / fps_timer.elapsed().as_secs_f64();
+        let pct = (fps / 59.7275 * 100.0).round() as u32;
+        canvas.window_mut().set_title(&format!("Vibeboy | {pct}%")).ok();
+        *fps_frame_count = 0;
+        *fps_timer = Instant::now();
+    }
+}
+
 fn build_keymap(kb: &vibeboy::config::KeyBindings) -> HashMap<Keycode, usize> {
     [
         (kb.right.as_str(),  btn::RIGHT),
@@ -110,8 +126,12 @@ fn main() {
     let width  = 160 * scale;
     let height = 144 * scale;
 
-    let keymap  = build_keymap(&config.keybindings);
-    let quit_kc = resolve_quit_key(&config.keybindings.quit);
+    let keymap     = build_keymap(&config.keybindings);
+    let quit_kc    = resolve_quit_key(&config.keybindings.quit);
+    let speedup_kc = Keycode::from_name(&config.keybindings.speedup).unwrap_or_else(|| {
+        eprintln!("Warning: unknown speedup key '{}', defaulting to D", config.keybindings.speedup);
+        Keycode::D
+    });
 
     let args: Vec<String> = std::env::args().collect();
     let rom_path = args.get(1).map(String::as_str).unwrap_or("red.gb");
@@ -170,7 +190,11 @@ fn main() {
     // -------------------------------------------------------------------------
     // When sound is disabled we use a simple timer to cap at ~59.73 Hz.
     const FRAME_DURATION: Duration = Duration::from_nanos(16_742_706); // 1 / 59.7275 Hz
+    const SPEED_FACTOR: u32 = 2;
     let mut frame_start = Instant::now();
+    let mut speedup_held = false;
+    let mut fps_frame_count: u32 = 0;
+    let mut fps_timer = Instant::now();
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -183,15 +207,22 @@ fn main() {
                         audio_queue.clear();
                     }
                 }
-                Event::KeyDown { keycode: Some(kc), .. } => {
+                Event::KeyDown { keycode: Some(kc), repeat: false, .. } => {
                     if kc == quit_kc {
                         break 'running;
+                    }
+                    if kc == speedup_kc {
+                        speedup_held = true;
                     }
                     if let Some(&button) = keymap.get(&kc) {
                         gb.bus.joypad.press(button, &mut gb.bus.interrupts);
                     }
                 }
                 Event::KeyUp { keycode: Some(kc), .. } => {
+                    if kc == speedup_kc {
+                        speedup_held = false;
+                        audio_queue.clear();
+                    }
                     if let Some(&button) = keymap.get(&kc) {
                         gb.bus.joypad.release(button);
                     }
@@ -200,6 +231,11 @@ fn main() {
             }
         }
 
+        let frames_to_run = if speedup_held { SPEED_FACTOR } else { 1 };
+        for _ in 0..frames_to_run.saturating_sub(1) {
+            gb.run_frame();
+            gb.bus.apu.drain_samples();
+        }
         let framebuffer = gb.run_frame();
 
         texture
@@ -209,7 +245,7 @@ fn main() {
             .expect("Texture lock failed");
 
         let samples = gb.bus.apu.drain_samples();
-        if config.sound_enabled {
+        if config.sound_enabled && !speedup_held {
             // Queue audio, dropping only if the device has stalled beyond the hard cap.
             if audio_queue.size() < AUDIO_MAX_BYTES {
                 audio_queue.queue_audio(&samples).ok();
@@ -220,22 +256,26 @@ fn main() {
         canvas.copy(&texture, None, None).expect("Texture copy failed");
         canvas.present();
 
-        if config.sound_enabled {
-            // Throttle emulation to the audio hardware clock. When the queue holds
-            // more than ~4 frames of audio, sleep until it drains to that level.
-            // This keeps the emulator at exactly 59.73 Hz without relying on vsync
-            // or OS sleep precision.
-            while audio_queue.size() > AUDIO_TARGET_BYTES {
-                std::thread::sleep(Duration::from_millis(1));
+        if !speedup_held {
+            if config.sound_enabled {
+                // Throttle emulation to the audio hardware clock. When the queue holds
+                // more than ~4 frames of audio, sleep until it drains to that level.
+                // This keeps the emulator at exactly 59.73 Hz without relying on vsync
+                // or OS sleep precision.
+                while audio_queue.size() > AUDIO_TARGET_BYTES {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            } else {
+                // Without audio throttling, sleep for the remainder of the frame period.
+                let elapsed = frame_start.elapsed();
+                if let Some(remaining) = FRAME_DURATION.checked_sub(elapsed) {
+                    std::thread::sleep(remaining);
+                }
+                frame_start = Instant::now();
             }
-        } else {
-            // Without audio throttling, sleep for the remainder of the frame period.
-            let elapsed = frame_start.elapsed();
-            if let Some(remaining) = FRAME_DURATION.checked_sub(elapsed) {
-                std::thread::sleep(remaining);
-            }
-            frame_start = Instant::now();
         }
+
+        update_title_fps(&mut canvas, &mut fps_frame_count, &mut fps_timer, frames_to_run);
     }
 
     let sav_data = gb.bus.cartridge.save_ram();
