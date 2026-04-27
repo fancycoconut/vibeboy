@@ -85,6 +85,14 @@ impl Bus {
         }
     }
 
+    /// Advance all cycle-sensitive components by N machine cycles (N×4 T-cycles).
+    /// Single place to add timer/PPU T-cycle accuracy in the future.
+    pub fn tick_m_cycle(&mut self, cycles: u8) {
+        self.apu.step(cycles);
+        // future: self.timer.tick_t(cycles as u32 * 4);
+        // future: self.ppu.tick_t(cycles as u32 * 4);
+    }
+
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.cartridge.read(addr),
