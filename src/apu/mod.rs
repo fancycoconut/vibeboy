@@ -215,6 +215,10 @@ struct Ch3 {
     freq_timer: u32,
     wave_pos: u8,    // 0-31 (index into 32 4-bit samples)
     wave_ram: [u8; 16],
+    // DMG: wave RAM is only accessible for ~4 T-cycles after the wave channel clocks.
+    // Counts down from 4 on each wave_pos advance; reads/writes outside this window
+    // return 0xFF / are ignored. GBC ignores this and allows free access.
+    wave_access_timer: i32,
 }
 
 impl Ch3 {
@@ -229,6 +233,7 @@ impl Ch3 {
             freq_timer: 4096,
             wave_pos: 0,
             wave_ram: [0; 16],
+            wave_access_timer: 0,
         }
     }
 
@@ -237,6 +242,9 @@ impl Ch3 {
     }
 
     fn tick(&mut self, tcycles: u32) {
+        // Decay the access window unconditionally so it expires even between tick calls.
+        self.wave_access_timer = (self.wave_access_timer - tcycles as i32).max(0);
+
         if !self.enabled {
             return;
         }
@@ -250,6 +258,9 @@ impl Ch3 {
                 rem -= self.freq_timer;
                 self.freq_timer = reload;
                 self.wave_pos = (self.wave_pos + 1) & 31;
+                // Open the 4 T-cycle DMG access window from the moment of the advance.
+                // Subtract cycles already consumed in this batch after the advance.
+                self.wave_access_timer = (4 - rem as i32).max(0);
             } else {
                 self.freq_timer -= rem;
                 rem = 0;
@@ -278,6 +289,7 @@ impl Ch3 {
         }
         self.freq_timer = self.freq_reload();
         self.wave_pos = 0;
+        self.wave_access_timer = 0;
         if !self.dac_on {
             self.enabled = false;
         }
@@ -627,11 +639,16 @@ impl Apu {
                     | (self.ch1.sq.enabled as u8);
                 0x70 | ((self.power as u8) << 7) | ch_bits
             }
-            // Wave RAM while CH3 active: reads redirect to the currently-played byte
-            // (address is ignored) on both DMG and CGB.
+            // Wave RAM while CH3 active: reads redirect to the currently-played byte.
+            // DMG: only within the 4 T-cycle access window; outside returns 0xFF.
+            // GBC: always returns the currently-played byte (no timing restriction).
             0xFF30..=0xFF3F => {
                 if self.ch3.enabled {
-                    self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize]
+                    if self.is_gbc || self.ch3.wave_access_timer > 0 {
+                        self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize]
+                    } else {
+                        0xFF
+                    }
                 } else {
                     self.ch3.wave_ram[(addr - 0xFF30) as usize]
                 }
@@ -822,11 +839,16 @@ impl Apu {
                 }
                 self.power = new_power;
             }
-            // Wave RAM writes while CH3 active:
-            // DMG and CGB: all writes redirect to the currently-played byte (address ignored).
             0xFF30..=0xFF3F => {
                 if self.ch3.enabled {
-                    self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize] = val;
+                    if self.is_gbc {
+                        // GBC: redirect to current wave position (no timing restriction).
+                        self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize] = val;
+                    } else if self.ch3.wave_access_timer > 0 {
+                        // DMG: within the 4 T-cycle window, write lands on the current byte.
+                        self.ch3.wave_ram[(self.ch3.wave_pos / 2) as usize] = val;
+                    }
+                    // DMG outside the window: write is ignored.
                 } else {
                     self.ch3.wave_ram[(addr - 0xFF30) as usize] = val;
                 }
